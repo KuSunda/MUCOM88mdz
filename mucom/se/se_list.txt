@@ -1,0 +1,8 @@
+BOM.mub
+CANCEL00.mub
+CANCEL01.mub
+COIN.mub
+CURSOR.mub
+OK.mub
+PAUSE.mub
+SHOT.mub

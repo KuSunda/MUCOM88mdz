@@ -1,0 +1,24 @@
+#mucom88 1.7
+#title TEST01
+#composer 
+#author 
+#date 
+#voice voice.dat
+#comment 
+
+# *1{cdefgab}
+# *2{rrrrrrr}
+
+A T128 @24 p3 l4 o4 v14 *1
+B T128 @25 p1 l4 o4 v14 *2*1
+C T128 @26 p2 l4 o4 v14 *2*2*1
+
+D T128 @0 l4 o4 v14 *2*2*2*1
+E T128 @1 l4 o4 v14 *2*2*2*2*1
+F T128 @2 l4 o4 v14 *2*2*2*2*2*1
+
+H T128 @24 p3 l4 o4 v14 *2*2*2*2*2*2*1
+I T128 @25 p1 l4 o4 v14 *2*2*2*2*2*2*2*1
+J T128 @26 p2 l4 o4 v14 *2*2*2*2*2*2*2*2*1
+
+

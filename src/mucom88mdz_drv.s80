@@ -1,0 +1,5222 @@
+; =============================================================================
+;
+;   MUSIC ROUTINE Ver 1.37
+;   FOR PC-8801MK2SR/FR/MR/TR
+;   1987/3        FH/MH/FA/MA & VA
+;   PROGRAMED BY YK-2
+;
+; -----------------------------------------------------------------------------
+; MUCOM88 Ver.1.1 music.asmをMegaDriveに移植
+; Porting by KuSunda
+; =============================================================================
+
+; =============================================================================
+; メモ
+; =============================================================================
+/*
+ ChannelDatの変更
+ PC88
+  music.asm(1.7)では、36～37Byteが空いている
+
+ MD 全チャンネルを4Byte拡張/未使用部分をリピートで使用
+  36 リピートのインデックス(範囲チェックはしていないが リピートのネストは4回まで)
+  37 REP1 Counter
+  38 REP2 Counter
+  39 REP3 Counter
+  40 REP4 Counter
+  41 Bit 0 = Cut-In Flag SEに割り込まれているか？
+
+ Music
+ .mubファイルのサイズは0x8000迄
+ 0x8000毎のバンクを跨ぐことは禁止
+
+ SE
+  オフセットテーブル・譜面合わせて0x8000迄
+*/
+
+; =============================================================================
+; conditional assemble
+; =============================================================================
+
+; compiler(MUCOM88を使っている)
+;	define	MUCOM88_COMPILER
+
+; デバッグ機能を有効にする
+	define	USE_DEBUG
+
+; PCMはデフォルトで12KHz、USE_PCM_12K をマスクすると24KHz
+	define	USE_PCM_12K
+
+; =============================================================================
+; アドレス定義
+; =============================================================================
+; ---------------------------------------------------------------------------
+; Z80 Memory Map
+BOOT_ADDR		EQU $0000   ; Z80の起動アドレス
+VINT_ADDR		EQU $0038   ; VSync割り込みのアドレス
+
+; |
+; Program & 確保したワーク
+; SEの譜面が400h位、RAMは 400hぐらい余っているが、68kに移行するべき
+; |
+
+WORK_RAM_ADDR	EQU $1e00   ; 固定アドレスのWORK（68Kとの通信用:mucom.hと合わせること）
+WORK_RAM_SIZE	EQU $0180   ; スタックの前まで
+
+STACK			EQU $2000   ; Z80 RAMのBottom
+STACK_SIZE		EQU $0080   ; Stackのサイズ(要サイズ確認)
+
+; ---------------------------------------------------------------------------
+; 68K Bank
+MPU68K_BANK_IO_ADDR	EQU $6000	; 64K側のBANKセレクトアドレス
+MPU68K_BANK_ADDR	EQU $8000	; 8000-ffff迄、68k側のメモリがセットされる
+
+; ---------------------------------------------------------------------------
+; Memory Mapped I/O
+
+; FM音源 アクセス
+FM_IO13_ADDR	EQU $4000	; FM 1-3 
+FM_IO13_ADDR2	EQU $4001	; FM 1-3 
+FM_IO46_ADDR	EQU $4002	; FM 4-6 
+FM_IO46_ADDR2	EQU $4003	; FM 4-6 
+
+; DCSG アクセス
+PSG_IO_ADRS     EQU $7f11	; PSG アクセスI/Oアドレス
+
+; =============================================================================
+; 固定アドレスワーク定義 
+; =============================================================================
+; WORK_RAM_ADDR
+; 64Kから参照されるアドレス　リクエストはここからコピーして使う
+REQ_CMMAND_RCV		EQU     (WORK_RAM_ADDR     )  ; 68k との通信 $1a00
+REQ_PARAM_RCV		EQU     (WORK_RAM_ADDR+1   )  ; 
+REQ_EFCT1_RCV		EQU     (WORK_RAM_ADDR+2   )  ; SE 1CH 
+REQ_EFCT_PARAM1_RCV	EQU     (WORK_RAM_ADDR+3   )  ; 
+REQ_EFCT2_RCV		EQU     (WORK_RAM_ADDR+4   )  ; 
+REQ_EFCT_PARAM2_RCV	EQU     (WORK_RAM_ADDR+5   )  ; 
+REQ_EFCT3_RCV		EQU     (WORK_RAM_ADDR+6   )  ; 
+REQ_EFCT_PARAM3_RCV	EQU     (WORK_RAM_ADDR+7   )  ; 
+
+VSYNC_CNT		EQU     (WORK_RAM_ADDR+0x10)          ; 1 byte VSyncの数(Z80が動いているか？)
+SND_STATUS		EQU     (WORK_RAM_ADDR+0x11)  ; .mubの演奏ステータス
+;TIMER_B_CNT		EQU     (WORK_RAM_ADDR+0x12)          ; 1 byte Timer-Bの処理回数(PL_SNDが動いているか？)
+									; 0:Non Play 1:Play
+
+PCM_REQ_CMMAND	EQU     (WORK_RAM_ADDR+0x13)  ; 
+PCM_REQ_PARAM	EQU     (WORK_RAM_ADDR+0x14)  ; 
+
+; 68k Bank Adress
+MUB_LOW_ADDR_RCV	EQU     (WORK_RAM_ADDR+0x1d)     ; 68K側 .mub アドレス
+MUB_MID_ADDR_RCV	EQU     (WORK_RAM_ADDR+0x1e)
+MUB_HIGH_ADDR_RCV	EQU     (WORK_RAM_ADDR+0x1f)
+
+SE_LOW_ADDR		EQU     (WORK_RAM_ADDR+0x20)     ; 68K側 SE　Bank アドレス 固定
+SE_MID_ADDR		EQU     (WORK_RAM_ADDR+0x21)
+SE_HIGH_ADDR	EQU     (WORK_RAM_ADDR+0x22)
+
+PCM_LOW_ADDR_RCV	EQU     (WORK_RAM_ADDR+0x23)     ; 68K側 PCM Bank アドレス
+PCM_MID_ADDR_RCV	EQU     (WORK_RAM_ADDR+0x24)
+PCM_HIGH_ADDR_RCV	EQU     (WORK_RAM_ADDR+0x25)
+
+PCM_END_LOW_ADDR_RCV	EQU	(WORK_RAM_ADDR + 0x28)	; PCMのLength
+PCM_END_HIGH_ADDR_RCV	EQU	(WORK_RAM_ADDR + 0x29)
+
+PCM_STATUS			EQU	(WORK_RAM_ADDR + 0x2a)
+
+; ---------------------------------------------------------------------------
+; Mucomの演奏状態(STOP/PLAY/MUTE/PAUSEなど)
+;  68Kからも確認する
+
+MUSIC_WK_ADR	EQU	WORK_RAM_ADDR+0x40
+FLGADR:			EQU	(MUSIC_WK_ADR)			; F9  サブコマンドで使用(曲からフラグを立てる)
+;T_FLAG:			EQU	(MUSIC_WK_ADR+1)
+;ESCAPE:			EQU	(MUSIC_WK_ADR+2)
+
+LOOP_MUB		EQU	(MUSIC_WK_ADR+1)		; != 0 なら、Loopの曲
+MUB_LOOPED		EQU	(MUSIC_WK_ADR+2)		; 曲がループしたか？
+SE_STATE_BIT	EQU	(MUSIC_WK_ADR+3)		; SEの演奏状態
+
+DCSG_OCT_UNDER	EQU	(MUSIC_WK_ADR+4)		; DCSG演奏不可能低音のリクエスト回数
+DCSG_NOISEP		EQU	(MUSIC_WK_ADR+5)		; MIXMODE変更回数
+DCSG_NOISEW		EQU	(MUSIC_WK_ADR+6)		; ノイズパラメータ設定回数
+
+; 68kから参照するチャンネルデータの先頭アドレス
+CHDAT_A		EQU	(WORK_RAM_ADDR+0x60)          ; FM1
+CHDAT_B		EQU	(WORK_RAM_ADDR+0x62)          ; FM2
+CHDAT_C		EQU	(WORK_RAM_ADDR+0x64)          ; FM3
+CHDAT_D		EQU	(WORK_RAM_ADDR+0x66)          ; SSG1
+CHDAT_E		EQU	(WORK_RAM_ADDR+0x68)          ; SSG2
+CHDAT_F		EQU	(WORK_RAM_ADDR+0x6a)          ; SSG3
+CHDAT_G		EQU	(WORK_RAM_ADDR+0x6c)          ; SSG3
+CHDAT_H		EQU	(WORK_RAM_ADDR+0x6e)          ; FM4
+CHDAT_I		EQU	(WORK_RAM_ADDR+0x70)          ; FM5
+CHDAT_J		EQU	(WORK_RAM_ADDR+0x72)          ; FM6
+CHDAT_K		EQU	(WORK_RAM_ADDR+0x74)          ; SSG3
+CHDAT_D2	EQU	(WORK_RAM_ADDR+0x76)          ; SE SSG1
+CHDAT_E2	EQU	(WORK_RAM_ADDR+0x78)          ; SE SSG1
+CHDAT_F2	EQU	(WORK_RAM_ADDR+0x7a)          ; SE SSG1
+
+
+; ---------------------------------------------------------------------------
+; Mubをアクセスするアドレスの変数
+/*
+ ファイル後半に移行
+MusicNum		EQU	WORK_RAM_ADDR+0x30          ; 1byte c200h
+OtoDat			EQU	WORK_RAM_ADDR+0x32          ; used 4byte aline(不要だけどね)
+Mu_Top			EQU	WORK_RAM_ADDR+0x34          ; used 2
+
+MUSICNUM	   EQU	WORK_RAM_ADDR+0x36          ; 1byte c200h
+*/
+
+; =============================================================================
+; 68K → Z80 のリクエスト定義
+; =============================================================================
+; ---------------------------------------------------------------------------
+; Music
+
+; Musicリクエスト
+MUB_REQ_NONE	EQU  (0x00)		; NONE
+MUB_REQ_START	EQU  (0x01)		; START
+MUB_REQ_STOP	EQU  (0x02)		; STOP
+MUB_REQ_FADEOUT	EQU  (0x03)		; FADEOUT
+
+; 演奏ステータス
+MUB_STATE_STOP	EQU	(0x00)		; Music 停止中
+MUB_STATE_PLAY	EQU	(0x01)		; Music 演奏中
+MUB_STATE_LOOP	EQU	(0x02)		; 曲が1回ループした。(非ループ曲なら演奏終了となる)
+
+; ---------------------------------------------------------------------------
+; Sound Effect
+
+; SE リクエスト
+SE_REQ_NONE		EQU (0x00)			; リクエストがない
+SE_REQ_NML		EQU (0x01)			; 通常のリクエスト
+SE_REQ_TYPE1	EQU (0x02)			; 未使用
+SE_REQ_TYPE2	EQU (0x03)			; 未使用
+
+; SE 番号
+SE_ID_STOP		EQU	(0xff)
+
+; SEの演奏Channel Bit
+SE_PLAY_BIT1    EQU (0)
+SE_PLAY_BIT2    EQU (1)
+SE_PLAY_BIT3    EQU (2)
+
+; SEの演奏Channel Mask
+SE_PLAY_MSK1    EQU (0x01)
+SE_PLAY_MSK2    EQU (0x02)
+SE_PLAY_MSK3    EQU (0x04)
+
+MAXCH			EQU	(11)							; MusicChannel MAX
+ALLMAXCH		EQU	(14)							; include SE Chennnel Max
+
+PCMADR			EQU	0E300H                  ; used 2
+
+; ---------------------------------------------------------------------------
+; PCMステータス
+PCM_NO_PLAY		EQU	(0)
+PCM_NOW_PLAY	EQU	(1)
+
+; ---------------------------------------------------------------------------
+; 0x27 Reg(NML/EFC/Timer-AB)
+/*
+TMA_ON  EQU 0001h   ; Timer-A START
+TMB_ON  EQU 0002h   ; Timer-B START
+
+TMA_ENA EQU 0004h   ; Timer-A enable タイマーフラグが立つ
+TMB_ENA EQU 0008h   ; Timer-B enable タイマーフラグが立つ
+
+TMA_RES EQU 0010h   ; Timer-A タイマーフラグリセット
+TMB_RES EQU 0020h   ; Timer-B タイマーフラグリセット
+
+MD_NML  EQU 0000h
+MD_CSM  EQU 0040h
+MD_EFC  EQU 0080h
+
+; Boot RESET
+YMREG_27    EQU 02700h
+TMAB_RESET  EQU (TMA_RES|TMB_RES)
+TMAB_START  EQU (TMA_RES|TMB_RES|TMA_ENA|TMB_ENA|TMA_ON|TMB_ON)
+*/
+
+; 4000h Read
+STAT_BUSY   EQU 08h         ; OPN2 FM BusyBit
+STAT_TMA    EQU 001h        ; Timer-A OverflowBit
+STAT_TMB    EQU 002h        ; Timer-B OverflowBit
+
+; SetBank
+SET_MUB_BANK	EQU	0
+SET_SE_BANK		EQU	1
+SET_PCM_BANK	EQU	2
+
+; =============================================================================
+; =============================================================================
+; Program START
+; =============================================================================
+; =============================================================================
+
+; =============================================================================
+; Boot
+; =============================================================================
+		ORG $0000
+boot:
+	di
+	jp EntryPoint
+
+;==============================================================================
+; VBlank interrupts - used for keeping the music going
+;==============================================================================
+	BLOCK   $0038-$
+VSync:
+	di
+
+	PUSH    AF
+
+; VSync Ctr
+;	ld	a,(VSYNC_CNT)
+;	inc	a
+;	ld	(VSYNC_CNT),a
+
+	ld	a,1					; VSyncEnd(MainLoop wait)
+	ld  (VSYNCFLAG),a
+
+	POP	AF
+	ei
+	reti            ; 割り込みルーチンから返る
+
+;==============================================================================
+; Entry point
+;==============================================================================
+EntryPoint
+	di
+	ld sp,STACK
+	im 1h              ; interrupts mode 1(38h Only)
+
+	call MucomSysInit
+	ei
+
+MainLoop:
+	call	req_param_copy
+
+	; PCM ------------------------------------
+	ld	a,(PCM_REQ_CMMAND)
+	or	a
+	jp	z,pcm_skip
+
+	cp	2
+	jp	nc,pcm_skip		; 演奏していないときにSTOPコマンドは無視
+
+	xor	a
+	ld	(PCM_REQ_CMMAND),a
+
+	call	PcmLoop
+
+pcm_skip:
+	; Mub ------------------------------------
+	call    Check_MusicReq
+
+	ld  a,(SND_STATUS)
+	or	a
+	jp  z,mub_noplay_skip
+
+	xor		a
+	call	SetBank
+
+	call    PL_SND          ; Timer-Bのリセットが行われている
+
+mub_noplay_skip:
+	; SE ------------------------------
+	call SeMain
+
+VSyncWait
+	ld  a,(VSYNCFLAG)
+	and	a
+	jp z,VSyncWait
+	xor	a
+	ld  (VSYNCFLAG),a
+
+	jp  MainLoop
+
+; -----------------------------------------------------------------------------
+req_param_copy:
+
+	ld	a,(REQ_CMMAND_RCV)
+	ld	(REQ_CMMAND),a
+
+	ld	a,(REQ_PARAM_RCV)
+	ld	(REQ_PARAM),a
+
+	ld	a,(MUB_LOW_ADDR_RCV)
+	ld	(MUB_LOW_ADDR),a
+	ld	a,(MUB_MID_ADDR_RCV)
+	ld	(MUB_MID_ADDR),a
+	ld	a,(MUB_HIGH_ADDR_RCV)
+	ld	(MUB_HIGH_ADDR),a
+
+	ld	a,(REQ_EFCT1_RCV)
+	ld	(REQ_EFCT1),a
+	ld	a,(REQ_EFCT_PARAM1_RCV)
+	ld	(REQ_EFCT_PARAM1),a
+
+	ld	a,(REQ_EFCT2_RCV)
+	ld	(REQ_EFCT2),a
+	ld	a,(REQ_EFCT_PARAM2_RCV)
+	ld	(REQ_EFCT_PARAM2),a
+
+	ld	a,(REQ_EFCT3_RCV)
+	ld	(REQ_EFCT3),a
+	ld	a,(REQ_EFCT_PARAM3_RCV)
+	ld	(REQ_EFCT_PARAM3),a
+
+	ld	a,(PCM_LOW_ADDR_RCV)
+	ld	(PCM_LOW_ADDR),a
+	ld	a,(PCM_MID_ADDR_RCV)
+	ld	(PCM_MID_ADDR),a
+	ld	a,(PCM_HIGH_ADDR_RCV)
+	ld	(PCM_HIGH_ADDR),a
+
+	ld	a,(PCM_END_LOW_ADDR_RCV)
+	ld	(PCM_END_LOW_ADDR),a
+	ld	a,(PCM_END_HIGH_ADDR_RCV)
+	ld	(PCM_END_HIGH_ADDR),a
+
+	xor	a
+	ld	(REQ_CMMAND_RCV),a
+	ld	(REQ_PARAM_RCV),a
+
+	ld	(REQ_EFCT1_RCV),a
+	ld	(REQ_EFCT_PARAM1_RCV),a
+	ld	(REQ_EFCT2_RCV),a
+	ld	(REQ_EFCT_PARAM2_RCV),a
+	ld	(REQ_EFCT3_RCV),a
+	ld	(REQ_EFCT_PARAM3_RCV),a
+
+	ld	(PCM_LOW_ADDR_RCV),a
+	ld	(PCM_MID_ADDR_RCV),a
+	ld	(PCM_HIGH_ADDR_RCV),a
+	ld	(PCM_END_LOW_ADDR_RCV),a
+	ld	(PCM_END_HIGH_ADDR_RCV),a
+
+	ret
+
+; -----------------------------------------------------------------------------
+; PCM Loop(クロックだけ計算してLOOPしておく)
+; PCMはストップ出来ない
+; -----------------------------------------------------------------------------
+PcmLoop:
+	ld	a,PCM_NOW_PLAY
+	ld	(PCM_STATUS),a
+
+	call	PCM_ALL_VOL_OFF
+	call	PCM_STER2			; FM6(PCM)のパンを真ん中にセット
+
+	; 28hReg に0x80 でDACモード
+	LD	A, 2Bh		;FM6無効, PCM有効
+	LD	(FM_IO13_ADDR), A
+	LD	A, 80h
+	LD	(FM_IO13_ADDR2), A
+
+	LD	A, 2Ah		;PCMデータレジスタを選択
+	LD	(FM_IO13_ADDR), A
+
+CutInPcm:
+	ld		a,SET_PCM_BANK
+	call	SetBank			; hlにPCMの先頭が返ってくる
+	ld	bc,(PCM_END_LOW_ADDR)			; size (loop num) 
+
+	; hl 先頭アドレス/ bc loop回数
+pcm_loop0:
+	nop					; 4
+	nop					; 4
+
+pcm_loop1:
+	;http://68000.web.fc2.com/z80pcm.html
+	;Total 149CLOCK, 3579540/149= 24.023KHz
+	;                3579540/298= 12.011Hz
+	inc	hl				; 6
+	ld	a,(hl)			; 7
+	LD	(FM_IO13_ADDR2), A		; 7	YM2151のデータポートに送る BC
+						;(+20)
+
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+						; (+40)
+
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+						; (+60)
+
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+						; (+80)
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+						; (+100)
+	nop					; 4
+	nop					; 4
+
+
+	ifdef	USE_PCM_12K
+
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4 32
+
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4 32
+
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4 32
+
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4 128
+
+
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4
+	nop					; 4 148
+
+	endif
+
+	ld	a,(PCM_REQ_CMMAND)	; 13
+	or	a					; 4
+	jr	nz,next_req			; 7 Next Req or STOP Req
+
+	dec	c				; 4
+	jr	nz,pcm_loop0	; 7 (133)/ 12 (138)
+;	jp	nz,pcm_loop0	; 10 (136)/ 10 (138)
+
+	dec	b				; 4
+	jr	nz,pcm_loop1	; 7 (149)/ 12
+;	jp	nz,pcm_loop1	; 10 (???)/ 10
+
+REQ1:
+	; FMモード
+	LD	A, 2Bh		;FM6無効, PCM有効
+	LD	(FM_IO13_ADDR), A
+	LD	A, 00h
+	LD	(FM_IO13_ADDR2), A
+
+	call	PCM_ALL_VOL_ON
+	call	RET_STER2			; FM6のパンを戻す
+
+	ld	a,PCM_NO_PLAY
+	ld	(PCM_STATUS),a
+
+	; STOPと同時にBGM/SEのリクエストが有れば処理する
+	call	req_param_copy
+
+	ret
+
+; 演奏中に次のリクエストが発生したので、STOPか新規PCM演奏を行う
+next_req
+	dec	a
+	jr	nz,REQ1			; 停止リクエスト
+
+	; 次のリクエストのBank
+	ld	a,(PCM_LOW_ADDR_RCV)
+	ld	(PCM_LOW_ADDR),a
+	ld	a,(PCM_MID_ADDR_RCV)
+	ld	(PCM_MID_ADDR),a
+	ld	a,(PCM_HIGH_ADDR_RCV)
+	ld	(PCM_HIGH_ADDR),a
+
+	ld	a,(PCM_END_LOW_ADDR_RCV)
+	ld	(PCM_END_LOW_ADDR),a
+	ld	a,(PCM_END_HIGH_ADDR_RCV)
+	ld	(PCM_END_HIGH_ADDR),a
+
+	xor	a
+	ld	(PCM_REQ_CMMAND),a
+
+	ld	(PCM_LOW_ADDR_RCV),a
+	ld	(PCM_MID_ADDR_RCV),a
+	ld	(PCM_HIGH_ADDR_RCV),a
+	ld	(PCM_END_LOW_ADDR_RCV),a
+	ld	(PCM_END_HIGH_ADDR_RCV),a
+
+	jp	CutInPcm		; 次のリクエスト
+
+; =============================================================================
+; システム初期化
+; TODO : 変数を整理してLDIRで初期化する
+MucomSysInit
+	xor	a
+
+	; request work from 68k
+	ld (REQ_CMMAND),a
+	ld (REQ_PARAM),a
+	ld (REQ_EFCT1),a
+	ld (REQ_EFCT_PARAM1),a
+	ld (REQ_EFCT2),a
+	ld (REQ_EFCT_PARAM2),a
+	ld (REQ_EFCT3),a
+	ld (REQ_EFCT_PARAM3),a
+
+	; 68k bank work
+	ld (MUB_LOW_ADDR),a
+	ld (MUB_MID_ADDR),a
+	ld (MUB_HIGH_ADDR),a
+
+	ld (NOW_MUB_LOW_ADDR),a
+	ld (NOW_MUB_MID_ADDR),a
+	ld (NOW_MUB_HIGH_ADDR),a
+
+	ld (SE_LOW_ADDR),a
+	ld (SE_MID_ADDR),a
+	ld (SE_HIGH_ADDR),a
+
+	ld (PCM_LOW_ADDR_RCV),a
+	ld (PCM_MID_ADDR_RCV),a
+	ld (PCM_HIGH_ADDR_RCV),a
+
+	ld (PCM_LOW_ADDR),a
+	ld (PCM_MID_ADDR),a
+	ld (PCM_HIGH_ADDR),a
+
+	ld (VSYNC_CNT),a
+
+	; for mub
+	ld (MusicNum),a
+	ld (OtoDat),a
+	ld (OtoDat+1),a
+	ld (OtoDat+2),a
+	ld (OtoDat+3),a
+
+	ld (Mu_Top),a
+	ld (Mu_Top+1),a
+
+	ld (MUSICNUM),a
+
+	ld (SND_STATUS),a
+
+	ld (LOOP_MUB),a
+
+	; PCM_NOW_PLAY
+	ld	(PCM_STATUS),a
+
+	; SEのワーク初期化
+	call    SeInit
+
+	;----------------------------------------------
+	; 68Kからチャンネルの情報を取得するアドレスを設定 
+	ld		hl,CHDAT_A
+
+	ld		de,CH1DAT         ; FM
+	call	set_access_wk
+	ld		de,CH2DAT         ; FM
+	call	set_access_wk
+	ld		de,CH3DAT         ; FM
+	call	set_access_wk
+
+	ld		de,CH4DAT         ; SSG
+	call	set_access_wk
+	ld		de,CH5DAT         ; SSG
+	call	set_access_wk
+	ld		de,CH6DAT         ; SSG
+	call	set_access_wk
+
+	ld		de,DRAMDAT         ; Rythm
+	call	set_access_wk
+
+	ld		de,CHADAT         ; SSG 1
+	call	set_access_wk
+	ld		de,CHBDAT         ; SSG 1
+	call	set_access_wk
+	ld		de,CHCDAT         ; SSG 1
+	call	set_access_wk
+
+	ld		de,PCMDAT         ; PCM
+	call	set_access_wk
+
+	; SE
+	ld		de,SeCh1Dat         ; SSG 1
+	call	set_access_wk
+	ld		de,SeCh2Dat         ; SSG 1
+	call	set_access_wk
+	ld		de,SeCh3Dat         ; SSG 1
+	call	set_access_wk
+
+	ret
+
+set_access_wk
+	ld	(hl),e
+	inc	hl
+	ld	(hl),d
+	inc	hl
+
+	ret
+
+; -----------------------------------------------------------------------------
+; 指定したアドレスの.mub/SE/PCMのバンクを設定する
+; IN   a : 設定するBankの種類 0:Mub 1:SE 2:PCM
+; OUT hl : 指定したアドレスの下位2Byteを返す
+; -----------------------------------------------------------------------------
+SetBank:
+	or	a
+	jr	nz,setbank00
+
+	ld	hl,NOW_MUB_LOW_ADDR
+	jr	setbank10
+
+setbank00:
+	cp	SET_SE_BANK
+	jr	nz,setbank01
+
+	ld	hl,SE_LOW_ADDR
+	jr	setbank10
+
+setbank01:
+	ld	hl,PCM_LOW_ADDR
+
+setbank10:
+	ld	de,SetBankTmp
+	ld	bc,3
+	ldir
+
+	ld hl,$6000                     ; BANK SELECT ADRESS
+	ld a,(SetBankTmp+1)				; mid
+	rlca
+	ld (hl),a
+	ld a,(SetBankTmp+2)				; high
+	ld (hl),a
+	rrca
+	ld (hl),a
+	rrca
+	ld (hl),a
+	rrca
+	ld (hl),a
+	rrca
+	ld (hl),a
+	rrca
+	ld (hl),a
+	rrca
+	ld (hl),a
+	rrca
+	ld (hl),a
+
+	ld a,(SetBankTmp)			; low
+	ld l,a
+	ld a,(SetBankTmp+1)		; high
+	or $80
+	ld h,a ; HL= address of the tune in Z80 address space
+
+	ret
+
+; -----------------------------------------------------------------------------
+; .mubのdataアドレスをmucomのワークにセットする。
+; 演奏リクエストがあったら、.Mubのアドレスをセットします。
+; -----------------------------------------------------------------------------
+SetMubAdrs
+;	call MubBankSel            ; hlが.mubのdata先頭
+	xor	a
+	call	SetBank			; hl
+
+	ld  (MusicNum),hl       ; 2 Bye
+	inc hl
+	ld  (OtoDat),hl         ; 4 Byte
+	
+	inc	hl
+	inc	hl
+	inc	hl
+	inc	hl
+	ld  (Mu_Top),hl         ; 2 Byte
+
+	ret
+
+; -----------------------------------------------------------------------------
+; 68KからのMusicaリクエストチェックと処理開始
+; -----------------------------------------------------------------------------
+Check_MusicReq
+	ld  a,(REQ_CMMAND)
+	or	a
+	jp	z,ReqCheckEnd
+
+	cp	MUB_REQ_START
+	jp	z,ReqMubStart
+	cp	MUB_REQ_STOP
+	jp	z,ReqMubStop
+	cp	MUB_REQ_FADEOUT
+	jp	z,ReqMubFadeOut
+
+ReqCheckClear
+	xor	a               ; リクエストを消去
+	ld  (REQ_CMMAND),a
+
+ReqCheckEnd
+	ret
+
+; -----------------------------------------------------------------------------
+; 演奏開始リクエスト
+; -----------------------------------------------------------------------------
+ReqMubStart
+	ld  a,(SND_STATUS)      ;; 演奏中は曲を止めてからリクエストすること
+	or	a
+	jp	z,req_mub00
+
+	; 演奏中のリクエスト
+	CALL	MSTOP               ; 演奏中なら一旦止める
+
+req_mub00:
+	; 演奏開始時に.mubのバンクをセット
+	ld a,(MUB_HIGH_ADDR)
+	ld (NOW_MUB_HIGH_ADDR),a
+	ld a,(MUB_MID_ADDR)
+	ld (NOW_MUB_MID_ADDR),a
+	ld a,(MUB_LOW_ADDR)
+	ld (NOW_MUB_LOW_ADDR),a
+
+	call	SetMubAdrs
+	xor		a
+	call	MSTART
+
+	ld	a,MUB_STATE_PLAY
+	ld	(SND_STATUS),a   ; 演奏開始
+
+	jp ReqCheckClear
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; 演奏停止リクエスト
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+ReqMubStop
+	ld  a,(SND_STATUS)
+	or	a
+	jp	z,ReqCheckEnd                    ; 演奏されていない
+
+	; 終了処理
+	CALL	MSTOP
+
+	jp	ReqCheckClear
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; FadeOutリクエスト
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+ReqMubFadeOut:
+	call FDO
+
+	jp	ReqCheckClear
+
+; ---------------------------------------------------------------------------
+; mub FadeOut Request
+; ---------------------------------------------------------------------------
+FDO:
+	ld	a,16
+	ld	hl,FDCO
+	ld	(hl),a
+	inc	hl
+	ld	(hl),a
+
+	ret
+
+; ---------------------------------------------------------------------------
+; FadeOut処理 FADE
+; ---------------------------------------------------------------------------
+FDOUT:
+	LD	HL,FDCO+1
+	DEC	(HL)
+	RET	NZ
+
+	LD	(HL),16
+	LD	A,(FDCO)
+	OR	A
+	RET	Z
+
+	DEC	A
+	LD	(FDCO),A
+FDO2:
+	ADD	A,0F0H
+	LD	(TOTALV),A
+	XOR	A
+	LD	(FMPORT),A      ; FM 1-3
+	LD	IX,CH1DAT
+	CALL	FDOFM
+
+	LD	B,3				; PSGのフェード
+FDOSSG
+	PUSH	BC
+	LD	A,(IX+6)
+	LD	C,A
+	AND	11110000B		; SoftEnv Param
+	LD	E,A
+	LD	A,C
+	AND	00001111B		; Volume Param
+	LD	C,A
+	CALL	PV1
+	LD	DE,WKLENG
+	ADD	IX,DE
+	POP	BC
+	DJNZ	FDOSSG
+	
+	CALL	DVOLSET     ; RHYTHM
+	
+	LD	A,4             ; FM 4以降
+	LD	(FMPORT),A
+	LD	DE,WKLENG
+	ADD	IX,DE
+	CALL	FDOFM
+
+	LD	A,(FDCO)
+	OR	A
+	JR	Z,FDO3			; To Music Stop
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; FM 3ch Fadeout Sub
+FDOFM
+	LD	B,3
+FDL2:
+	PUSH	BC
+	CALL	STVOL
+	LD	DE,WKLENG
+	ADD	IX,DE
+	POP	BC
+	DJNZ	FDL2
+	LD	B,3
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; Fadeout Stop & Music Stup
+FDO3
+	CALL	MSTOP
+
+	XOR	A
+	LD	(TOTALV),A
+
+	RET
+
+; -----------------------------------------------------------------------------
+; Music Start
+; -----------------------------------------------------------------------------
+MSTART
+	LD      (MUSICNUM),A			; MDは0で固定
+	CALL	AKYOFF
+	CALL	SSGOFF
+	CALL	WORKINIT				; チャンネルデータのクリアとチャンネルごとの譜面をセット
+
+; スタート
+START
+	PUSH	HL
+
+;	call	InitNoise
+	call	MONO
+	CALL	TO_NML
+
+	POP	HL
+
+	RET
+
+; -----------------------------------------------------------------------------
+; 演奏ストップ
+MSTOP:
+	CALL	AKYOFF
+	CALL	SSGOFF
+
+	xor	a
+	ld	(SND_STATUS),a
+
+	RET
+
+; -----------------------------------------------------------------------------
+; Noiseチャンネル初期化(未使用)
+; -----------------------------------------------------------------------------
+InitNoise
+	ret
+
+; -----------------------------------------------------------------------------
+; サウンド関係の割り込み許可(使わない)
+; -----------------------------------------------------------------------------
+ENBL
+	LD	A,(TIMER_B)
+	LD	E,A
+	CALL	STTMB		;  SET Timer-B
+
+	RET
+	
+; -----------------------------------------------------------------------------
+;	ALL MONORAL / H.LFO OFF
+; -----------------------------------------------------------------------------
+MONO
+	LD	D,0B4H
+	LD	E,0C0H
+	XOR	A               ; FM 1-3
+	LD	(FMPORT),A
+	LD	B,3
+MONO2
+	CALL	PSGOUT
+	INC	D
+	DJNZ	MONO2
+	
+/*
+	LD	D,018H          ; RHYTHM音源
+	LD	B,6
+MONO3:
+	CALL	PSGOUT
+	INC	D
+	DJNZ	MONO3
+*/
+
+	LD	B,3                 ; FM 4-6
+	LD	D,0B4H
+	LD	A,4
+	LD	(FMPORT),A
+MONO4
+	CALL	PSGOUT
+	INC	D
+	DJNZ	MONO4
+	
+	XOR	A
+	LD	(FMPORT),A
+
+
+	LD	DE,2200H        ; LFOのクリア
+	CALL	PSGOUT
+
+
+/*
+	LD	DE,1200H
+	CALL	PSGOUT
+
+	LD	HL,PALDAT       ;	PMS/AMS/LR DATA ワークの初期化
+	LD	B,7
+MONO5:
+	LD	(HL),0C0H
+	INC	HL
+	DJNZ	MONO5
+	
+	LD	A,3             ; PCMのワーク初期化
+	LD	(PCMLR),A
+*/
+	RET
+	
+; -----------------------------------------------------------------------------
+;  MAIN
+; -----------------------------------------------------------------------------
+PL_SND:
+	PUSH	AF
+	PUSH	HL
+	PUSH	DE
+	PUSH	BC
+	PUSH	IX
+	PUSH	IY
+
+						; ------------
+PLSET1:					; FMのNML/EFCモードを自己書き換えしている
+	LD	E,38H			;  TIMER-OFF DATA   ; 割り込みは使わないが、効果音モード(FM3)の設定は有効
+	LD	D,27H
+	CALL	PSGOUT		;  TIMER-OFF
+PLSET2:
+	LD	E,3AH
+	CALL	PSGOUT		;  TIMER-ON
+						; ------------
+
+
+/*
+	;TODO  Pauseが必要ならここで判定
+	CALL	ESC_PRC
+
+PLSND1:
+	LD	A,(ESCAPE)
+	OR	A
+	JR	NZ,PLSND4
+*/
+	CALL	DRIVE
+	CALL	FDOUT
+	CALL	TSC
+
+PLSND3:
+	POP	IY
+	POP	IX
+	POP	BC
+	POP	DE
+	POP	HL
+	POP	AF
+
+	RET
+
+; -----------------------------------------------------------------------------
+/*
+CUE:
+    IN	A,(9)			;IOポート 09h	(STOP	f.1	f.2	f.3	f.4	f.5	SPACE	ESC)
+    BIT	1,A
+    RET	NZ
+	CALL	DRIVE
+	CALL	DRIVE
+	CALL	DRIVE
+	CALL	DRIVE
+	POP	DE
+	JR	PLSND3
+*/
+
+; -----------------------------------------------------------------------------
+;	音源のドライブ
+DRIVE:
+	; FM 1-3
+	XOR	A
+	LD	(FMPORT),A
+	
+	LD	IX,CH1DAT
+	CALL	FMENT
+	LD	IX,CH2DAT
+	CALL	FMENT
+	LD	IX,CH3DAT
+	CALL	FMENT
+	
+	;	SSG 4-6
+	LD	A,0FFH
+	LD	(SSGF1),A
+
+	LD	IX,CH4DAT
+	ld	a,SE_PLAY_MSK1
+	call    SeCutInCk   ; Seの割り込みチェック
+	CALL	SSGENT
+	call    SeCutInClear
+
+	LD	IX,CH5DAT
+	ld	a,SE_PLAY_MSK2
+	call    SeCutInCk   ; Seの割り込みチェック
+	CALL	SSGENT
+	call    SeCutInClear
+
+	LD	IX,CH6DAT
+	ld	a,SE_PLAY_MSK3
+	call    SeCutInCk   ; Seの割り込みチェック
+	CALL	SSGENT
+	call    SeCutInClear
+
+	XOR	A
+	LD	(SSGF1),A
+	
+;;	LD	A,(NOTSB2)
+;;	OR	A
+;;	RET	NZ					; SB2でなければRET
+
+
+	INC	A
+	LD	(DRMF1),A
+	LD	IX,DRAMDAT			; リズム音源のデータ
+	CALL	FMENT
+	XOR	A
+	LD	(DRMF1),A
+	
+	; FM音源 4-6
+	LD	A,4
+	LD	(FMPORT),A
+	LD	IX,CHADAT
+	CALL	FMENT
+	LD	IX,CHBDAT
+	CALL	FMENT
+	LD	IX,CHCDAT
+	CALL	FMENT
+
+	; PCM
+	LD	A,0FFH
+	LD	(PCMFLG),A
+	LD	IX,PCMDAT
+	CALL	FMENT
+	XOR	A
+	LD	(PCMFLG),A
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; SE割り込みチェック
+;  a : Cannel　Mask
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+SeCutInCk:
+	ld	b,a
+	ld	a,(SePlayStat)
+	and	b
+	ret	z		; このチャンネルは割り込まれていない
+
+	ld	a,1
+	ld	(SeCutIn),a			; このチャンネルは割り込まれている
+
+	set	0,(IX+41)			; チャンネルワークにCutInFlagを立てる
+
+	ret
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+SeCutInClear:
+	xor	a
+	ld	(SeCutIn),a
+	ret
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; SSG
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+SSGENT:
+;;	BIT     3,(IX+31)
+;;	CALL    NZ,REOFF
+	CALL    SSGSUB
+	CALL    PLLFO
+;;	BIT     3,(IX+31)
+;;	CALL    NZ,REON
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; FM 
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+FMENT:
+;;	BIT	3,(IX+31)			; MUTE FLAG
+;;	CALL	NZ,REOFF		; MUTE FLAGが立っていたら、REOFFにする
+	CALL	FMSUB
+	CALL	PLLFO
+;;	BIT	3,(IX+31)			; MUTE FLAGが立っていたら、REONにする
+;;	CALL	NZ,REON
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; 
+/*
+REON:
+	LD	A,0FFH
+	LD	(READY),A
+	RET
+REOFF:
+	XOR	A
+	LD	(READY),A
+	RET
+*/
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; FM 譜面処理
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+FMSUB:
+	LD	A,(IX)		; Clockの減算
+	DEC	A
+	LD	(IX),A
+	JR	Z,FMSUB1	; 次の音符
+	
+	LD	B,(IX+18)	; 'q' スタカートのClock減算
+	CP	B
+	JR	Z,FMSUB0	; To REVERVE/SOFT ENV
+	RET	NC
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; FMSUB0 リバーブ・ソフトエンベロープ処理
+FMSUB0:
+	LD	H,(IX+3)
+	LD	L,(IX+2)	;  HL=SOUND DATA ADDRESS
+	LD	A,(HL)		;  A=DATA
+	CP	0FDH		; COUNT OVER ?  A = 0xfd は終了
+	RET	Z
+	BIT	5,(IX+33)	; REVERVE FLAG
+	JR	NZ,FS2
+	CALL	KEYOFF	; REVERVE FLAG Offの処理
+	RET
+FS2:
+	LD	A,(IX+6)	; Volme
+	ADD	A,(IX+17)	; SoftEnve Dummy (6byte last)
+	LD	C,A			
+	SRL	C
+	CALL	STV2
+	SET	6,(IX+31)	;  SET KEYOFF FLAG
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; 次の音符の処理
+FMSUB1:
+	SET	6,(IX+31)	; KEYOFF FLAG ON
+	LD	H,(IX+3)
+	LD	L,(IX+2)	; HL=SOUND DATA ADD
+	LD	A,(HL)		; A=DATA
+	CP	0FDH		; COUNT OVER?
+	JR	NZ,FMSUBC
+FMSUBE:
+	RES	6,(IX+31)	; RES KEYOFF FLAG
+	INC	HL			; 次の音符に進む
+FMSUBC:
+	LD	A,(HL)		; A=DATA
+	OR	A			; データ終了を調べる
+	JR	NZ,FMSUB2	;* 00H as end
+
+					; 曲の終了判定チェック
+	SET	0,(IX+31)	; LOOPEND FLAG 立てる
+	LD	D,(IX+5)
+	LD	E,(IX+4)	; HL=DATA TOP ADDRES
+	LD	A,E
+	OR	D
+	JP	Z,FMEND		;* DATA TOP ADRESS がﾞ 0000H で、
+					; BGMの終了を決定　それ以外は繰り返し
+	EX	DE,HL
+
+FMSUBB:
+	LD	A,(HL)		; GET FLAG & LENGTH
+
+					; SET LENGTH
+FMSUB2:				; Next Note
+	INC	HL
+	CP	0F0H		;
+	JP	NC,FMSUBA	; DATA がコマンドなら FMSUBA へ
+
+	RLCA
+	SRL	A			; GET CY=7TH BIT (休符フラグ) : A=LENGTH
+	LD	(IX),A		; SET WAIT COUNTER
+	JP	NC,FMSUB5	; 音符なら FMSUB5 へ
+
+					; -------------------------------------
+					; 下は休符
+					; SET F-NUMBER
+FMSUB3:
+	LD	(IX+3),H
+	LD 	(IX+2),L	; SET NEXT SOUND DATA ADD
+	BIT	4,(IX+33)	; REVERVE MODE
+	JR	NZ,FS3
+	BIT	5,(IX+33)	; REVERVE FLAG
+	JR	NZ,FS2		; REVERVE処理に移行
+FS3:
+	CALL	KEYOFF
+	RET
+
+						; -------------------------------------
+						; Note
+FMSUB5:
+	BIT	6,(IX+31)		; CHECK KEYOFF FLAG
+	CALL	NZ,KEYOFF	; 新しい音符ならKEYOFFに飛ぶはず
+	
+	LD	A,(PLSET1+1)
+	CP	78H
+	JR	NZ,FMSUB4		; NML/EFFECT ?
+	
+	LD	A,(FMPORT)
+	OR	A
+	JR	NZ,FMSUB4
+	LD	A,(IX+8)
+	CP	2		; CH=3?
+	JP	Z,EXMODE		; SEモード
+
+FMSUB4:
+	LD	A,(HL)		; A=BLOCK( OCTAVE-1 ) & KEY CODE DATA
+	INC	HL
+	LD	(IX+3),H
+	LD	(IX+2),L	; SET NEXT SOUND DATA ADD
+
+	LD	B,A			; STORE
+	BIT	6,(IX+31)	; CHECK KEYOFF FLAG
+	JR	NZ,FMSUB9
+
+	LD	A,(IX+32)	; GET BEFORE CODE DATA
+	SUB	B
+	JR	NZ,FMSUB9
+	SCF
+	RET
+FMSUB9:
+	LD	A,B
+	LD	(IX+32),A
+	LD	A,(PCMFLG)
+	OR	A
+	JR	NZ,PCMGFQ
+	LD	A,(DRMF1)
+	OR	A
+	JR	Z,FMGFQ
+DRMFQ:
+	BIT	6,(IX+31)
+	RET	Z
+	CALL	DKEYON
+	RET
+PCMGFQ:
+	LD	A,B
+	AND	00001111B
+	LD	HL,PCMNMB
+	ADD	A,A
+	LD	E,A
+	LD	D,0
+	ADD	HL,DE
+	LD	A,(HL)
+	INC	HL
+	LD	H,(HL)
+	LD	L,A
+	LD	E,(IX+9)
+	LD	D,(IX+10)
+	ADD	HL,DE
+	
+	LD	A,B
+	AND	11110000B
+	RRCA
+	RRCA
+	RRCA
+	RRCA
+	LD	B,A
+	DEC	B
+	INC	B
+	JR	Z,ASUB72
+ASUB7:
+	SRL	H
+	RR	L
+	DJNZ	ASUB7
+ASUB72:
+	LD	(DELT_N),HL
+	BIT	6,(IX+31)
+	JR	NZ,AS72
+	CALL	LFORST
+AS72:
+	CALL	LFORST2
+	CALL	PLAY
+	RET
+FMGFQ:
+	LD	A,B
+	LD 	C,A			; STORE
+	AND 	70H		; GET BLOCK DATA
+	SRL	A			; A4-A6 ポート　出力用に合わせる
+	LD 	B,A
+
+	LD	A,C			; RESTORE A
+	AND	0FH			; GET KEY CODE (C,C+,D ... B)
+
+	ADD	A,A
+	LD	E,A
+	LD	D,0
+	LD	HL,FNUMB
+	ADD	HL,DE
+
+	LD	C,(HL)
+	INC	HL
+	LD	A,(HL)		; GET FNUM2
+	OR	B			; A= KEY CODE & FNUM HI
+
+	LD	L,C
+	LD	H,A
+	LD	D,(IX+10)	;
+	LD	E,(IX+9)	; GET DETUNE DATA
+	ADD	HL,DE		; DETUNE PLUS
+	BIT	6,(IX+33)
+	JR	NZ,FMS92
+	LD	(IX+29),L	; FOR LFO
+	LD	(IX+30),H	; FOR LFO
+	
+	LD	(FNUM),HL
+FMS92:
+	BIT	6,(IX+31)
+	CALL	NZ,LFORST
+	CALL	LFORST2
+FMSUB8:
+	LD	BC,0
+FMSUB6:
+	ADD	HL,BC		; BLOCK/FNUM1&2 DETUNE PLUS (for SE MODE)
+	LD	E,H			; BLOCK/F-NUMBER2 DATA
+FPORT:
+	LD	A,0A4H		; PORT A4H
+	ADD	A,(IX+8)
+	LD	D,A
+	CALL	PSGOUT
+
+	SUB	4
+	LD	D,A
+	LD	E,L		; F-NUMBER1 DATA
+FMSUB7:
+	CALL	PSGOUT
+	CALL	KEYON
+	AND	A
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+;	SE MODE の DETUNE 設定
+EXMODE:
+	LD	BC,(DETDAT)
+	LD	B,0
+	LD	(FMSUB8+1),BC
+	CALL	FMSUB4		; SET OP1
+	RET	C
+
+	LD	HL,DETDAT+1
+	LD	A,0AAH			;  A = CH3 F-NUM2 OP1 PORT - 2
+EXMLP:
+	LD	(FPORT+1),A
+	INC	A
+	PUSH	AF
+	LD	C,(HL)
+	LD	B,0
+	INC	HL
+	PUSH	HL
+HLSTC0:
+	LD	HL,(FNUM)
+	CALL	FMSUB6		; SET OP2-OP4
+
+	POP	HL
+	POP	AF
+	CP	0ADH			; END PORT+1
+	JP 	NZ,EXMLP
+
+	LD	A,0A4H
+	LD	(FPORT+1),A
+BRESET:
+	LD	BC,0
+	LD	(FMSUB8+1),BC
+	RET					;  RET TO MAIN
+
+; -----------------------------------------------------------------------------
+; **	KEY-OFF ROUTINE		**
+KEYOFF:
+	LD	A,(PCMFLG)
+	OR	A
+	JP	NZ,PCMEND           ; ADPCM処理へ移行
+
+	LD	A,(DRMF1)
+	OR	A
+	JR	NZ,DKEYOF           ; RHYTHM処理へ移行
+
+	LD      A,(FMPORT)
+	ADD     A,(IX+8)
+	LD      E,A
+	LD      D,28H           ;  PORT 28H
+	CALL    PSGOUT  ;  KEY-OFF
+	RET
+	
+; -----------------------------------------------------------------------------
+;	リズム音源のキーオフ
+DKEYOF:
+	LD	D,10H
+	LD	A,(RHYTHM)	; GET RETHM PARAMETER
+	AND	00111111B
+	OR	80H
+	LD	E,A
+	CALL	PSGOUT
+	RET
+
+; -----------------------------------------------------------------------------
+; **	KEY-ON  ROUTINE   **
+KEYON:
+/*
+	LD	A,(READY)
+	OR	A
+	RET	Z
+*/
+	LD	A,(FMPORT)
+	OR	A
+	LD	A,0F0H
+	JR	Z,KEYON2
+	LD	A,0F4H
+KEYON2:
+	ADD	A,(IX+8)
+	LD	E,A
+	LD	D,28H
+	CALL	PSGOUT		;  KEY-ON
+	BIT	5,(IX+33)
+	CALL	NZ,STVOL
+	RET
+	
+; -----------------------------------------------------------------------------
+;	リズム音源のキーオン
+DKEYON:
+/*
+	LD	A,(READY)
+	OR	A
+	RET	Z
+	LD	D,10H
+	LD	A,(RHYTHM)	; GET RETHM PARAMETER
+	AND	00111111B
+	LD	E,A		; KEY ON
+	CALL	PSGOUT
+*/
+	RET
+
+; -----------------------------------------------------------------------------
+; **	ALL KEY-OFF ROUTINE   **
+AKYOFF:
+	PUSH	AF
+	PUSH	BC
+	PUSH	DE
+	
+	LD	E,0             ; slot:0 channel 1-7で変化する、全てのチャンネルをOFF
+	LD	D,28H           ; $28 xxxx-yyy x:slot y:channel
+	LD	B,7             ; TODO 6回ループで良いはず（　FMは6チャンネルで yyy = 111 は使われていないBit列）
+AKYOF2:
+	CALL	PSGOUT      ; slotが0で、chanel が、0-6まで設定される(TODO slotってなに？)
+	INC	E
+	DJNZ	AKYOF2      ; 条件ジャンプ (B≠0)  PC ← PC+e(相対ジャンプ) /   B ← B - 1
+	
+	POP	DE
+	POP	BC
+	POP	AF
+	RET
+
+; -----------------------------------------------------------------------------
+; FM DATA OUT ROUTINE	
+; D レジスタに、Eを書き込む
+; D : REGISTER No.() 20h + channel no)
+; E : DATA
+; -----------------------------------------------------------------------------
+PSGOUT:
+	push	af
+	push	hl
+
+	ld  hl,FM_IO13_ADDR				; FM 1-3&control
+	ld	a,d
+	cp	30h					; 30H以降はFMパラメータ
+	jr	c,PSGO4				; ＄21-＄2Cレジスタ（コントロール）はジャンプ
+
+	ld	a,(FMPORT)			; 操作するFMポート
+	and	a
+	jr	z,PSGO4
+	ld hl,FM_IO46_ADDR		; FM 4-6
+
+PSGO4:
+	call    PSGOUT_Md
+
+PSGOE:
+	pop	hl
+	pop	af
+
+	ret
+/*
+PSGOUT:
+	PUSH	AF
+	PUSH	BC
+	PUSH	HL
+	
+	LD	A,(PORT13)		; FM1-3 I/O
+	LD	C,A
+	LD	A,D
+	CP	30H
+	JR	C,PSGO4
+	LD	A,(FMPORT)		; 0:1-3 4:4-6
+	AND	A
+	JR	Z,PSGO4			; 内蔵のPORT13で、前半か後半かを判定
+	
+	LD	A,(PORT13+1)	; FM4-6 I/O
+	LD	C,A
+PSGO4:
+	OUT	(C),D
+	PUSH	BC
+	POP	BC
+	INC	BC
+	OUT	(C),E
+	
+	PUSH	DE
+	
+	CALL	PUTWK
+PSGOE:
+	POP	DE
+	POP	HL
+	POP	BC
+	POP	AF
+	RET
+*/
+
+; -----------------------------------------------------------------------------
+; YM2162 AccessWait Macro
+; -----------------------------------------------------------------------------
+	MACRO WaitStatus
+.wait
+	ld a,(FM_IO13_ADDR)
+	and 0x80
+	jr nz,.wait
+	ENDM
+
+; -----------------------------------------------------------------------------
+; YM2612にデータを書き込む(1-3/4-6共通)
+; de :  Reg/param
+; hl : adress
+; break a/hl
+; -----------------------------------------------------------------------------
+PSGOUT_Md:
+
+PSGOUT_MD00:
+	ld a,(FM_IO13_ADDR)
+	and 0x80
+	jr nz,PSGOUT_MD00
+
+	ld    a, d
+	ld    (hl),a
+
+PSGOUT_MD01:
+	ld a,(FM_IO13_ADDR)
+	and 0x80
+	jr nz,PSGOUT_MD01
+
+	inc    hl
+	ld    a, e
+	ld    (hl),a
+
+	ret
+
+; -----------------------------------------------------------------------------
+; YM2612にデータを書き込む(1-3/4-6共通)
+; In de reg/param
+; Break a
+; -----------------------------------------------------------------------------
+PSGOUT_MdA:
+;sendDEPortA:
+	WaitStatus
+	ld    a, d
+	ld    (FM_IO13_ADDR),a
+	inc	    a
+
+	WaitStatus
+	ld    a, e
+	ld    (FM_IO13_ADDR2),a
+
+	ret
+
+; -----------------------------------------------------------------------------
+; YM2612にデータを書き込む(1-3/4-6共通)
+; In de reg/param
+; break a
+; -----------------------------------------------------------------------------
+PSGOUT_MdB:
+;sendDEPortB:
+	WaitStatus
+	ld    a, d
+	ld    (FM_IO46_ADDR),a
+
+	WaitStatus
+	ld    a, e
+	ld    (FM_IO46_ADDR2),a
+
+	ret
+
+; -----------------------------------------------------------------------------
+/*
+Timer_B
+
+	LD	A,D
+	CP	30H					; 30H以降はFMパラメータ
+	JR	C,PSGO4				; ＄21-＄2Cレジスタ（コントロール）はジャンプ
+
+PSGO4:
+	PSGOUT_Md				; PC88は2つのIOへのアクセスだったが、MDはWORDメモリにアクセス
+
+	PUSH	DE
+	CALL	PUTWK
+
+PSGOE:
+	POP	HL
+	POP	HL
+	POP	AF
+
+	ret
+*/
+
+; -----------------------------------------------------------------------------
+; DCSGレジスタへの書き込み
+;   IN:a<=DCSG パラメーター(Vol | Reg / Tone / Reg)
+; -----------------------------------------------------------------------------
+DCSGOUT:
+	bit		0,(IX+41)	; Bitが立っていたら、SEに割り込まれている。
+	ret		nz
+DCSGOUT_FORCE:
+	ld (PSG_IO_ADRS),a		; DCSGレジスタに出力
+	ret
+
+; -----------------------------------------------------------------------------
+; FM　SubCommand Jump
+; -----------------------------------------------------------------------------
+FMSUBA:
+	AND	0FH		; A=COMMAND No.(0-F)
+	LD	DE,FMSUBC
+	PUSH	DE		; STORE RETURN ADDRES(SUB COMMANDが終わったら、次の音符処理に移行)
+	LD	DE,FMCOM
+	LD	B,A
+	ADD	A,A
+	ADD	A,B		; A*3
+	ADD	A,E
+	LD	E,A
+	ADC	A,D
+	SUB	E
+	LD	D,A		; DE+A*3
+	PUSH	DE	; SUB COMMANDのアドレスをPUSHして、RETで移動する
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+;	FM CONTROL COMMAND(s) サブコマンド
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+FMCOM:
+	JP	OTOPST		; F0-音色セット    '@'
+	JP	VOLPST		; F1-VOLUME SET   'v'
+	JP	FRQ_DF		; F2-DETUNE(周波数ずらし) 'D'
+	JP	SETQ		; F3-SET COMMAND 'q'
+	JP	LFOON		; F4-LFO SET
+	JP	REPSTF		; F5-REPEAT START SET  '['
+	JP	REPENF		; F6-REPEAT END SET    ']'
+	JP	MDSET		; F7-FM音源　モードセット
+	JP	STEREO		; F8-STEREO MODE
+	JP	FLGSET		; F9-FLAGSET
+	JP	W_REG		; FA-COMMAND OF   'y'
+	JP	VOLUPF		; FB-VOLUME UP    ')'
+	JP	HLFOON		; FC-HARD LFO
+	JP	TIE		; (CANT USE)
+	JP	RSKIP		; FE-REPEAT JUMP'/'
+	JP	SECPRC		; FF-to second com
+	
+FMCOM2:
+	JP	PVMCHG		;FFF0-PCM VOLUME MODE
+	JP	HRDENV		;FFF1-HARD ENVE SET 's'
+	JP	ENVPOD		;FFF2-HARD ENVE PERIOD
+	JP	REVERVE		;FFF3-リバーブ
+	JP	REVMOD		;FFF4-リバーブモード
+	JP	REVSW		;FFF5-リバーブ　スイッチ
+
+; -----------------------------------------------------------------------------
+; Second SubCommand
+; @note SubCommand FF FM/DCSG    
+SECPRC:
+	LD	A,(HL)
+	INC	HL
+	AND	0FH		; A=COMMAND No.(0-F)
+	LD	DE,FMCOM2
+	LD	B,A
+	ADD	A,A
+	ADD	A,B
+	ADD	A,E
+	LD	E,A
+	ADC	A,D
+	SUB	E
+	LD	D,A
+	PUSH	DE
+
+; -----------------------------------------------------------------------------
+; 未使用コマンド
+; @note SubCommand FC    DCSG
+NTMEAN:
+	RET
+
+; -----------------------------------------------------------------------------
+; 未使用コマンド
+; @note SubCommand FD    FM/DCSG
+
+; -----------------------------------------------------------------------------
+TIE:
+	RES	6,(IX+31)
+	RET
+	
+; -----------------------------------------------------------------------------
+; **	FLAGSET	**
+; @note SubCommand F09    FM/DCSG
+FLGSET:
+	LD	A,(HL)
+	INC	HL
+	LD	(FLGADR),A
+	RET
+	
+; -----------------------------------------------------------------------------
+; **	ﾘﾊﾞｰﾌﾞ	**
+; @note SubCommand2 FFF3
+REVERVE:
+	LD	A,(HL)
+	INC	HL
+	LD	(IX+17),A
+RV1:
+	SET	5,(IX+33)
+		RET
+
+; -----------------------------------------------------------------------------
+; @note SubCommand2 FFF5
+REVSW:
+	LD	A,(HL)
+	INC	HL
+	OR	A
+	JR	NZ,RV1
+	RES	5,(IX+33)
+	CALL	STVOL
+	RET
+
+; -----------------------------------------------------------------------------
+; @note SubCommand2 FFF4    
+REVMOD:
+	LD	A,(HL)
+	INC	HL
+	OR	A
+	JR	Z,RM2
+	SET	4,(IX+33)
+	RET
+RM2:
+	RES	4,(IX+33)
+	RET
+	
+; -----------------------------------------------------------------------------
+; **	PCM VMODE CHANGE	**
+; @note SubCommand2 FFF0    
+PVMCHG:
+	LD	A,(HL)
+	INC	HL
+	LD	(PVMODE),A
+	RET
+	
+; -----------------------------------------------------------------------------
+; **	STEREO	**
+; @note SubCommand     F8 FM
+STEREO:
+	LD	A,(DRMF1)
+	OR	A
+	JR	NZ,STE2
+	LD	A,(PCMFLG)
+	OR	A
+	JR	Z,STER2
+	LD	A,(HL)
+	INC	HL
+	LD	(PCMLR),A
+	RET
+; FMのパン
+STER2:
+	LD	A,(HL)		; 
+	INC	HL
+	RRCA			; →ローテート
+	RRCA
+	LD	C,A
+	LD	DE,PALDAT	; L1/R1/AMS2/-1/PMS3
+	LD	A,(FMPORT)
+	ADD	A,(IX+8)
+	ADD	A,E
+	LD	E,A
+	ADC	A,D
+	SUB	E
+	LD	D,A
+	LD	A,(DE)
+	AND	00111111B		; LR以外
+	OR	C
+	LD	(DE),A			; パラメーターを保存
+
+RET_STER2_sub:	
+	
+	LD	E,A
+	LD	A,0B4H
+	ADD	A,(IX+8)
+	LD	D,A
+	CALL	PSGOUT		; 1100 0000b  LR
+	RET
+
+; 現在のパンを再セットする(PCMの割り込みから復帰用) $b6 ch6(3)
+;TODO PALDATの0xc0の初期化を作るべき？
+RET_STER2:
+	ld	IX,CHCDAT		; FM 6
+;	FM音源 4-6
+;	LD	A,4
+;	LD	(FMPORT),A
+	ld	de,PALDAT+7		; L1/R1/AMS2/-1/PMS3
+	ld	a,(de)
+
+	jr	RET_STER2_sub
+
+; PCMを真ん中にセットする
+PCM_STER2:
+	ld	IX,CHCDAT		; FM 6
+;	FM音源 4-6
+;	LD	A,4
+;	LD	(FMPORT),A
+	ld	a,0c0h			; とりあえずモノラル固定
+
+	jr	RET_STER2_sub
+
+; Rhythmのパン
+STE2:
+	LD	A,(HL)
+	INC	HL
+	LD	C,A
+	AND	00001111B
+	LD	B,A
+	LD	DE,DRMVOL
+	ADD	A,E
+	LD	E,A
+	ADC	A,D
+	SUB	E
+	LD	D,A
+	LD	A,(DE)
+	PUSH	DE
+	AND	00011111B
+	LD	E,A
+	LD	A,C
+	RLCA
+	RLCA
+	AND	11000000B
+	OR	E
+	POP	DE
+	LD	(DE),A
+	LD	E,A
+	LD	A,B
+	ADD	A,18H
+	LD	D,A
+	CALL	PSGOUT
+	RET
+	
+; -----------------------------------------------------------------------------
+; **	VOLUME UP & DOWN	**
+; @note SubCommand FB FM    
+VOLUPF:
+	LD	A,(HL)
+	INC	HL
+	ADD	A,(IX+6)
+	LD	(IX+6),A
+	LD	A,(PCMFLG)
+	OR	A
+	RET	NZ
+	LD	A,(DRMF1)
+	OR	A
+	JP	NZ,DVOLSET
+	CALL	STVOL
+	RET
+	
+; -----------------------------------------------------------------------------
+; **	SE DETUNE SET SUB ROUTINE	**
+; @note SubCommand  F7 FM
+MDSET:
+	CALL	TO_EFC
+	LD	DE,DETDAT
+	LD	BC,4
+	LDIR
+	RET
+
+; -----------------------------------------------------------------------------
+; **	HARD LFO SET	**
+; @note SubCommand FC FM    
+HLFOON:
+	LD	A,(HL)	; FREQ CONT
+	INC	HL
+	OR	00001000B
+	LD	E,A
+	LD	D,022H
+	CALL	PSGOUT
+	
+	LD	C,(HL)	; PMS
+	INC	HL
+	LD	A,(HL)	; AMS
+	INC	HL
+	RLCA
+	RLCA
+	RLCA
+	RLCA
+	OR	C
+	LD	C,A	; AMS+PMS
+	
+	LD	A,(FMPORT)
+	ADD	A,(IX+8)
+	LD	DE,PALDAT
+	ADD	A,E
+	LD	E,A
+	ADC	A,D
+	SUB	E
+	LD	D,A
+	LD	A,(DE)
+	AND	11000000B
+	OR	C
+	LD	(DE),A
+	
+	LD	E,A
+	LD	A,0B4H
+	ADD	A,(IX+8)
+	LD	D,A
+	CALL	PSGOUT
+	RET
+	
+; -----------------------------------------------------------------------------
+; **	SOFT LFO SET(RESET)	**
+; @note SubCommand F04 FM/DCSG
+LFOON:
+	LD	A,(HL)		; GET SUB COMMAND
+	INC	HL
+	
+	OR	A
+	JP	NZ,LFOON3
+	
+	CALL	SETDEL
+	CALL	SETCO
+	CALL	SETVCT
+	CALL	SETPEK
+	
+	SET	7,(IX+31)	;  SET LFO FLAG
+	RET
+	
+LFOON3:
+	DEC	A
+	LD	C,A
+	ADD	A,A
+	ADD	A,C
+	LD	DE,LFOTBL
+	
+	ADD	A,E
+	LD	E,A
+	ADC	A,D
+	SUB	E
+	LD	D,A
+	
+	PUSH	DE
+	RET
+
+;--------------------------------
+; LFO FuncTbl
+LFOTBL:
+	JP	LFOOFF
+	JP	LFOON2
+	JP	SETDEL
+	JP	SETCO
+	JP	SETVC2
+	JP	SETPEK
+
+;--------------------------------
+; LFO Function
+SETDEL:
+	LD	A,(HL)
+	INC	HL
+	LD 	(IX+19),A	; SET DELAY
+	LD	(IX+20),A
+	RET
+SETCO:
+	LD	A,(HL)
+	INC	HL
+	LD	(IX+21),A	; SET COUNTER
+	LD	(IX+22),A
+	RET
+SETVCT:
+	LD	E,(HL)
+	INC	HL
+	LD	D,(HL)
+	INC	HL
+	LD	(IX+23),E	; SET 変化量
+	LD	(IX+25),E
+	LD	(IX+24),D
+	LD	(IX+26),D
+	RET
+SETVC2:
+	CALL	SETVCT
+	JP	LFORST
+SETPEK:
+	LD	A,(HL)
+	INC	HL
+	LD	(IX+27),A	; SET PEAK LEVEL
+	SRL	A
+	LD	(IX+28),A
+	RET
+	
+LFOON2:
+	SET	7,(IX+31)	; LFOON
+		RET
+LFOOFF:
+	RES	7,(IX+31)	; RESET LFO
+	RET
+	
+; -----------------------------------------------------------------------------
+;	SET Q COMMAND(スタカート用短縮クロック数)
+; @note SubComman F03 FM/DCSG
+SETQ:
+	LD	A,(HL)
+	INC	HL
+	LD	(IX+18),A
+	RET
+
+; -----------------------------------------------------------------------------
+; FM音色セット
+; @note SubCommand F0 FM
+OTOPST:
+	LD	A,(PCMFLG)
+	OR	A
+	JR	NZ,OTOPCM
+	LD	A,(DRMF1)
+	OR	A
+	JR	NZ,OTODRM
+	LD	A,(HL)
+	INC	HL
+	LD	(IX+1),A
+	CALL	STENV
+	CALL	STVOL
+	RET
+OTODRM:
+	LD	A,(HL)
+	INC	HL
+	LD	(RHYTHM),A	; SET RETHM PARA
+	RET
+OTOPCM:
+	LD	A,(HL)
+	LD	(PCMNUM),A
+	DEC	A
+	LD	(IX+1),A
+	INC	HL
+	ADD	A,A
+	ADD	A,A
+	ADD	A,A
+	PUSH	HL
+	LD	HL,PCMADR
+	LD	E,A
+	LD	D,0
+	ADD	HL,DE
+	LD	E,(HL)
+	INC	HL
+	LD	D,(HL)
+	INC	HL
+	LD	(STTADR),DE
+	LD	E,(HL)
+	INC	HL
+	LD	D,(HL)
+	INC	HL
+	LD	(ENDADR),DE
+	INC	HL
+	INC	HL
+	LD	E,(HL)
+	POP	HL
+	LD	A,(PVMODE)
+	OR	A
+	RET	Z
+	LD	(IX+6),E
+	RET
+
+; -----------------------------------------------------------------------------
+; Volume et
+; @note SubCommand F1 FM
+VOLPST:
+	LD	A,(PCMFLG)
+	OR	A
+	JR	NZ,PCMVOL           ; PCM音源の処理に移行
+
+	LD	A,(DRMF1)
+	OR	A
+	JR	NZ,VOLDRM           ; RHYTHM音源の処理へ移行
+
+	LD	A,(HL)
+	INC	HL
+	LD	(IX+6),A
+	CALL	STVOL           ; FMのボリューム
+	RET
+	
+VOLDRM:
+	LD	A,(HL)
+	INC	HL
+	LD	(IX+6),A
+	CALL	DVOLSET         ; リズム音源のボリューム
+VOLDR1:
+	LD	B,6
+	LD	DE,DRMVOL
+VOLDR2:
+	LD	C,(HL)
+	LD	A,(DE)
+	AND	11000000B
+	OR	C
+	LD	(DE),A
+	
+	PUSH	DE
+	LD	E,A
+	LD	A,B
+	SUB	6
+	NEG
+	LD	D,18H
+	ADD	A,D
+	LD	D,A
+;;    CALL	PSGOUT          ; RHYTHM
+	POP	DE
+	
+	INC	DE
+	INC	HL
+	DJNZ	VOLDR2
+	RET
+
+PCMVOL:
+	LD	E,(HL)
+	INC	HL
+	LD	A,(PVMODE)
+	OR	A
+	JR	NZ,PCMV2
+	LD	(IX+6),E
+	RET
+PCMV2:
+	LD	(IX+7),E
+	RET
+	
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; --   SET TOTAL RHYTHM VOL	--
+; @note リズムのボリューム    
+DVOLSET:
+	LD	D,11H
+	LD	A,(IX+6)
+	AND	00111111B
+	LD	E,A
+	LD	A,(TOTALV)
+	ADD	A,A
+	ADD	A,A
+	ADD	A,E
+	CP	64
+	JR	C,DV2
+	XOR	A
+DV2:
+	LD	E,A
+;;    CALL	PSGOUT          ; RHYTHMの統合ボリューム
+
+	RET
+	
+; -----------------------------------------------------------------------------
+; DTセット
+; @note SubCommand F02 (FM\DCSG)
+
+FRQ_DF:
+	XOR	A
+	LD	(IX+32),A	; DETUNE の場合は BEFORE CODE を CLEAR
+	LD	E,(HL)
+	INC	HL
+	LD	D,(HL)
+	INC	HL
+	LD	A,(HL)
+	INC	HL
+	OR	A
+	JR	Z,FD2
+	PUSH	HL
+	LD	L,(IX+9)
+	LD	H,(IX+10)
+	ADD	HL,DE
+	EX	DE,HL
+	POP	HL
+FD2:
+	LD	(IX+9),E
+	LD	(IX+10),D
+	LD	A,(PCMFLG)
+	OR	A
+	RET	Z
+						; PCM DETUNE設定
+	PUSH	HL
+	LD	HL,(DELT_N)
+	ADD	HL,DE
+	EX	DE,HL
+	LD	C,D
+	LD	D,09H
+	CALL	PCMOUT
+	INC	D
+	LD	E,C
+	CALL	PCMOUT
+	POP	HL
+	RET
+
+; -----------------------------------------------------------------------------
+; リピートスキップコマンド
+; @note SubCommand FE   FM/DCSG
+; @note MDは譜面をROMで持っているのでリピート数をチャンネルデータに4回分保持
+RSKIP:
+	LD	E,(HL)
+	INC	HL
+	LD	D,(HL)
+	INC	HL
+	
+	PUSH	HL
+	DEC	HL
+	DEC	HL
+	ADD	HL,DE
+;    LD	A,(HL)              ; 最後のループなら抜ける
+;    DEC	A				; LOOP カウンタ =1?
+
+	call RepCountCheck2
+	inc a
+	ld  b,(HL)		; DEC REPEAT Co.
+	cp	b
+
+	JR	Z,RSKIP2
+	POP	HL
+	RET
+RSKIP2:
+
+	call    ReCountClear
+	dec	(IX+36)         ; PTR
+
+	LD	DE,4
+	ADD	HL,DE	; HL = JUMP ADR
+	EX	DE,HL
+	POP	HL
+	EX	DE,HL
+	RET
+	
+; -----------------------------------------------------------------------------
+; リピートスタートコマンド
+; @note SubCommand F05　FM/DCSG
+; @note MDは譜面をROMで持っているのでリピート数をチャンネルデータに4回分保持
+REPSTF:
+	LD	E,(HL)      ; 
+	INC	HL
+	LD	D,(HL)		; DE as REWRITE ADR OFFSET +1
+	INC	HL
+	
+	PUSH	HL
+	DEC	HL
+	DEC	HL
+	ADD	HL,DE
+	LD	A,(HL)      ; OFFSETを取得              ; リピートカウンターの戻しかな？
+	DEC	HL
+;;;    LD	(HL),A      ; REPカウンターの初期値格納？
+	POP	HL
+
+	inc (IX+36)
+	call    ReCountClear
+
+	RET
+	
+; -----------------------------------------------------------------------------
+;　リピート終了　コマンド
+; @note SubCommand F05 FM/DCSG
+; @note MDは譜面をROMで持っているのでリピート数をチャンネルデータに4回分保持
+REPENF:
+	call RepCountCheck
+	ld  b,(HL)		; DEC REPEAT Co.
+	cp	b
+
+;;    DEC	(HL)		; DEC REPEAT Co.
+	JR	Z,REPENF2
+	
+	INC	HL          ; 計算中REPカウンタ（使わないけど）
+	INC	HL          ; 比較用REPカウンタ
+	
+	LD	E,(HL)
+	INC	HL
+	LD	D,(HL)
+	DEC	HL
+	AND	A               ; Carryフラグのリセット
+	SBC	HL,DE
+	RET
+	
+REPENF2:            ; リピート終了
+
+	call    ReCountClear
+	dec	(IX+36)         ; PTR
+
+	INC	HL
+	LD	A,(HL)          ; DEC (HL)したカウンターを戻すけど、MDでは68kROM領域なので戻さないほうがよい？
+	DEC	HL
+	LD	(HL),A
+	LD	DE,4
+	ADD	HL,DE
+	
+	RET
+
+; -----------------------------------------------------------------------------
+; リピートスタックをクリア
+ReCountClear:
+	push    hl
+	push    de
+
+	ld  a,(IX+36)
+
+	ld  e,a
+	ld  d,0
+
+	ld  hl,rep_idx_tbl
+	add hl,de
+	ld  a,(hl)
+
+	ld  e,a
+	ld  d,0
+	push    ix
+	pop hl
+
+	add hl,de
+
+	ld	(hl),0
+
+	pop     de
+	pop	    hl
+
+	ret
+
+; -----------------------------------------------------------------------------
+; IN:A<=REP Idx  
+; SSGのチャンネルボリュームReg番号からDCSGの番号に変換
+RepCountCheck:
+	push    hl
+	push    de
+
+	ld  a,(IX+36)
+
+	ld  e,a
+	ld  d,0
+
+	ld  hl,rep_idx_tbl
+	add hl,de
+	ld  a,(hl)
+
+	ld  e,a
+	ld  d,0
+	push    ix
+	pop hl
+
+	add hl,de
+
+	inc	(hl)
+	ld	a,(hl)
+
+	pop     de
+	pop	    hl
+	ret
+
+;; カウンターのインクリメントは行わない
+RepCountCheck2:
+	push    hl
+	push    de
+
+	ld  a,(IX+36)
+
+	ld  e,a
+	ld  d,0
+
+	ld  hl,rep_idx_tbl
+	add hl,de
+	ld  a,(hl)
+
+	ld  e,a
+	ld  d,0
+	push    ix
+	pop hl
+
+	add hl,de
+
+;;    inc	(hl)
+	ld	a,(hl)
+
+	pop     de
+	pop	    hl
+	ret
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+rep_idx_tbl:
+;       4   5   6   Noise
+	DB  36,37,38,39,40,41
+
+; -----------------------------------------------------------------------------
+; FM音色セット サブルーチン
+STENV:
+	PUSH	HL
+
+	CALL	KEYOFF
+	LD	A,80H
+	ADD	A,(IX+8)
+	LD	E,00FH
+	LD	B,4
+ENVLP:
+	LD	D,A
+	CALL	PSGOUT		; リリース(RR) カットの処理
+	ADD	A,4
+	DJNZ	ENVLP
+
+	LD	A,(IX+1)	; ワークから音色ナンバーを得る
+STENV0:
+	LD	C,A
+	
+	RRCA
+	RRCA
+	RRCA
+	RRCA			; *16
+	LD	H,A
+	AND	11110000B
+	LD	L,A
+	LD	A,H
+	AND	00001111B
+	LD	H,A		; HL=*16
+	
+	LD	A,C
+	ADD	A,A
+	ADD	A,A
+	ADD	A,A
+	ADD	A,C		; *9
+	
+	ADD	A,L
+	LD	L,A
+	ADC	A,H
+	SUB	L
+	LD	H,A		; HL=*25
+	
+	EX	DE,HL
+;;    LD	HL,(OTODAT)
+
+	ld  hl,(OtoDat)
+	ld	bc,hl
+	ld	bc,(hl)
+	push bc
+	pop	hl
+
+	INC	HL
+	ADD	HL,DE		;  HL は、音色データ格納アドレス
+;;    LD	DE,MUSICNUM
+	LD	DE,(MusicNum)           ; アドレスが入っている
+	ADD	HL,DE
+
+STENV1:
+	LD	BC,0406H	; 4 OPERATER
+					; 6 PARAMATER(Det/Mul,Total,KS/AR,DR,SR,SL/RR)
+	LD	A,30H		; START=PORT 30H
+	ADD	A,(IX+8)	; PLUS CHANNEL No.
+	LD	D,A
+
+STENV2:
+	PUSH	BC
+STENV3:
+	LD	E,(HL)		; GET DATA
+	CALL	PSGOUT
+
+	INC 	D		;
+	INC 	D		;  SKIP BLANK PORT
+	INC 	D		;
+	INC 	D		;
+	INC 	HL
+
+	DJNZ 	STENV3
+
+	POP	BC
+	DEC	C
+	JP	NZ,STENV2
+
+	LD	A,(HL)		; GET FEEDBACK/ALGORIZM
+	LD	E,A
+	AND	07H			; GET ALGORIZM
+	LD	(IX+7),A	; STORE ALGORIZM
+	LD	A,0B0H		; GET ALGO SET ADDRES
+	ADD	A,(IX+8)	; CH PLUS
+	LD	D,A
+	CALL	PSGOUT
+
+	POP	HL
+	RET
+
+; -----------------------------------------------------------------------------
+; ボリューム
+; @note FMのボリューム
+STVOL:
+	PUSH	HL
+	PUSH	DE
+	PUSH	BC
+
+	CALL	STV1
+
+	POP	BC
+	POP	DE
+	POP	HL
+	RET
+
+STV1:
+	LD	C,(IX+6)	; INPUT VOLUME
+	LD	A,(TOTALV)
+	ADD	A,C
+	CP	20			; FMのボリュームテーブルの段階
+	JR	C,STV12
+	XOR	A			; キャリーが有ると0番目のテーブルと言うことになる？
+STV12:
+	LD	C,A
+STV2:
+	LD	B,0
+	LD	HL,FMVDAT
+	ADD	HL,BC
+	LD	E,(HL)		; GET VOLUME DATA
+	
+	LD	A,40H
+	ADD	A,(IX+8)	; GET PORT No.
+
+	LD	HL,CRYDAT
+	LD	B,0
+	LD	C,(IX+7)	; INPUT ALGOLIZM
+	ADD	HL,BC
+	LD	C,(HL)      ; C=キャリア
+	LD	B,4         ; 4 OPERATER
+
+STVOL2:
+	RR	C
+	LD	D,A
+	CALL	C,PSGOUT	;  キャリアなら PSGOUT へ
+	ADD	A,4
+	DJNZ	STVOL2
+	RET
+
+; -----------------------------------------------------------------------------
+; PCMが割り込む時にボリュームを切る
+PCM_ALL_VOL_OFF:
+	; FM 
+	LD	IX,CH1DAT
+	ld	c,0
+	call	STV2
+
+	LD	IX,CH2DAT
+	ld	c,0
+	call	STV2
+
+	LD	IX,CH3DAT
+	ld	c,0
+	call	STV2
+
+	LD	IX,CHADAT
+	ld	c,0
+	call	STV2
+
+	LD	IX,CHBDAT
+	ld	c,0
+	call	STV2
+
+	LD	IX,CHCDAT
+	ld	c,0
+	call	STV2
+
+	; DCSG
+	ld	a,0fh
+	LD	IX,CH4DAT
+	or  a,(IX+7)            ; Vol | Reg
+	call    DCSGOUT_FORCE
+
+	ld	a,0fh
+	LD	IX,CH5DAT
+	or  a,(IX+7)            ; Vol | Reg
+	call    DCSGOUT_FORCE
+
+	ld	a,0fh
+	LD	IX,CH6DAT
+	or  a,(IX+7)            ; Vol | Reg
+	call    DCSGOUT_FORCE
+
+	; DCSG SE
+	ld	a,0fh
+	LD	IX,SeCh1Dat
+	or  a,(IX+7)            ; Vol | Reg
+	call    DCSGOUT
+
+	ld	a,0fh
+	LD	IX,SeCh2Dat
+	or  a,(IX+7)            ; Vol | Reg
+	call    DCSGOUT
+
+	ld	a,0fh
+	LD	IX,SeCh3Dat
+	or  a,(IX+7)            ; Vol | Reg
+	call    DCSGOUT
+
+
+	call	AKYOFF
+
+	ret
+; -----------------------------------------------------------------------------
+; PCMが割り込み終了でボリュームをもどす。
+PCM_ALL_VOL_ON:
+	LD	IX,CH1DAT
+	ld	c,0
+	call	STV1
+
+	LD	IX,CH2DAT
+	ld	c,0
+	call	STV1
+
+	LD	IX,CH3DAT
+	ld	c,0
+	call	STV1
+
+	LD	IX,CHADAT
+	ld	c,0
+	call	STV1
+
+	LD	IX,CHBDAT
+	ld	c,0
+	call	STV1
+
+	LD	IX,CHCDAT
+	ld	c,0
+	call	STV1
+
+	ret
+; -----------------------------------------------------------------------------	
+; Timer-B カウンタ・セット　ルーチン
+; IN: E<= TIMER_B COUNTER
+; @note PC88 only
+; @note 削除予定
+STTMB:
+	PUSH AF
+	PUSH DE
+
+STTMB2:
+	LD D,26H            ;Timer-B  D:26h E:Timer-B
+	CALL PSGOUT
+
+	LD D,27H
+	LD E,78H
+	CALL PSGOUT     ;  Timer-B OFF
+	LD E,7AH
+	CALL PSGOUT     ;  Timer-B ON
+
+;;    LD A,5            ; PC88 サウンド割り込み以下を停止
+;;    OUT (0E4H),A
+
+	POP DE
+	POP AF
+
+	RET
+
+; -----------------------------------------------------------------------------
+; Software LFO
+; 音符処理でToneを設定した後にLFOで変化させる
+PLLFO:
+					; ---	FOR FM & SSG LFO	---
+	BIT	7,(IX+31)	;  CHECK bit 7 ... LFO FLAG
+	RET	Z
+
+	LD	L,(IX+2)
+	LD	H,(IX+3)
+	DEC	HL
+	LD 	A,(HL)
+	CP	0F0H
+	RET	Z	;  以前のデータが '&' なら RET
+
+	BIT	5,(IX+31)	; LFO CONTINE FLAG
+	JR	NZ,CTLFO	; bit 5 = 1 なら LFO 継続
+
+	; **	LFO INITIARIZE   **
+	CALL	LFORST
+	CALL	LFORST2
+	LD	A,(IX+21)
+	LD	(IX+22),A
+	SET	5,(IX+31)	; SET CONTINUE FLAG
+
+	; **	LFO 処理
+CTLFO:
+	LD	A,(IX+20)	; n1 delay
+	OR	A
+	JR	Z,CTLFO1
+	DEC	A
+	LD	(IX+20),A
+	RET
+
+CTLFO1:
+	DEC	(IX+22)	;カウンタ	n2 振幅のクロックカウンタ
+	RET	NZ
+	
+	LD	A,(IX+21)
+	LD	(IX+22),A	; カウンタ　再設定
+	LD	A,(IX+28)	;  GET PEAK LEVEL COUNTER (P.L.C)
+	OR	A
+	JR	NZ,PLLFO1	;  P.L.C > 0 なら PLLFO1
+
+	AND	A			; 加算値を変転させる
+	LD	HL,0
+	LD	D,(IX+26)
+	LD	E,(IX+25)
+	SBC	HL,DE
+	LD	(IX+26),H
+	LD	(IX+25),L	; WAVE 反転　(変化量の反転)
+	LD	A,(IX+27)
+	LD	(IX+28),A	;  P.L.C 再設定
+
+PLLFO1:
+	DEC	(IX+28)		; P.L.C.-1   (変化回数 DEC)
+	LD	L,(IX+25)
+	LD	H,(IX+26)
+	CALL	PLS2
+	RET
+PLS2:
+
+	LD	A,(PCMFLG)
+	OR	A
+	JR	Z,PLSKI2
+						; ADPCMの処理 -----------
+	LD	DE,(DELT_N)
+	ADD	HL,DE
+	LD	(DELT_N),HL
+	LD	D,09H
+	LD	E,L
+	CALL	PCMOUT
+	INC	D
+	LD	E,H
+	CALL	PCMOUT
+	RET
+
+PLSKI2:
+	; 変化量+FNUM+DTを29/30に入れる
+	LD	E,(IX+29)	;  GET FNUM1
+	LD	D,(IX+30)	;  GET B/FNUM2
+	ADD	HL,DE		;  HL= NEW F-NUMBER
+	LD	(IX+29),L	; SET NEW F-NUM1
+	LD	(IX+30),H	; SET NEW F-NUM2
+
+	LD	A,(SSGF1) 
+	OR	A
+	JR	Z,LFOP5     ; FM音源ならLFOP5に移動
+	
+	; ---	FOR SSG	LFO	---
+	
+	LD	A,(IX+32)	; GET KEY CODE&OCTAVE　(BEFORE CODE)
+	
+	SRL	A
+	SRL	A
+	SRL	A
+	SRL	A
+	
+	OR	A		;  OCTAVE=1?
+	JR	Z,SSLFO2
+	LD	B,A
+	
+SNUMGETL:
+	
+	SRL	H
+	RR	L
+	DJNZ	SNUMGETL
+
+SSLFO2:
+	; DCSG(SSG)の音程を書き込み
+/*
+    LD	E,L
+    LD	D,(IX+8)            ; 音階レジスタ
+    CALL	PSGOUT
+    INC	D
+    LD	E,H
+    CALL	PSGOUT
+*/
+	call    ConvSSGTone2DCSG	; hlにtoneが入れて呼ぶ
+
+	ld	a,(IX+8)
+	or	a,h             ; 音程上位
+	or	a,0x80
+	call    DCSGOUT
+	ld	a,l
+	call    DCSGOUT
+
+	RET
+
+; ---------------------------------------------------------
+; IN:HL<=PSGの音程 H 上位 4Bit　L 下位 8Bit
+; 
+; @note PC88 SSGのTONEをDCSGに変換
+; PC88 12bit
+; B Fine Tune 8Bit   下位音階
+; A Coarse Tune 4Bit 上位音階
+; 76543210 76543210
+; ----AAAA BBBB BBBB
+;
+; MegaDrive 10bit
+; A/B Channel
+; C Tone Data
+;
+; 76543210 76543210
+; ABBBCCCC --CCCCCC
+;　　　下位     上位
+; 88 3816　/ o1 c
+; MD 3420  / o1 c
+; 0.89  >>>> DTやLFOの周波数の値は0.9倍ぐらいすると正しくなる？
+
+ConvSSGTone2DCSG:
+	push de
+
+	ld a,l
+	and	0fh         ; 4bit
+	ld  d,a         ; dにMD下位4Bitを保存
+
+	ld  a,l
+	srl a
+	srl a
+	srl a
+	srl a
+	and 0fh
+	ld  e,a         ; 上位の中の下位2Bit
+
+	ld  a,h
+	sla a
+	sla a
+	sla a
+	sla a
+	or	a,e         ; 上位の値
+
+	ld  h,d         ; 下位をh に
+	ld  l,a         ; 上位をl に
+
+
+	ld a,h			; LFOでMDの10bitをOverFlowした時用のマスク
+	and	0x0f
+	ld	h,a
+
+	ld a,l
+	and	0x3f
+	ld	l,a
+
+	pop	de
+	ret
+
+; ---	FOR FM LFO	---
+LFOP5:
+	BIT	6,(IX+33)
+	JR	NZ,LFOP6
+	BIT	1,(IX+8)	;  CH=3?
+	JR	Z,PLLFO2	; NOT CH3 THEN PLLFO2
+	LD	A,(PLSET1+1)
+	CP	78H
+	JR	NZ,PLLFO2	; NOT SE MODE
+	LD	(NEWFNM),HL
+LFOP4:
+	LD	HL,DETDAT
+	LD	IY,OP_SEL
+	LD	B,4
+LFOP3:
+	PUSH	BC
+	LD	DE,(NEWFNM)
+	LD	C,(HL)
+	LD	B,0
+	INC	HL
+	EX	DE,HL
+	ADD	HL,BC
+	
+	PUSH	DE
+	LD	E,H
+	LD	D,(IY)
+	INC	IY
+	CALL	PSGOUT
+	DEC	D
+	DEC	D
+	DEC	D
+	DEC	D
+	LD	E,L
+	CALL	PSGOUT
+	POP	DE
+	EX	DE,HL
+	POP	BC
+	DJNZ	LFOP3
+	RET
+
+PLLFO2:
+	LD	E,H
+	LD	A,0A4H	;  PORT A4H
+	ADD	A,(IX+8)
+	LD	D,A
+	CALL	PSGOUT
+	SUB	4
+	LD	E,L	;  F-NUMBER1 DATA
+	LD	D,A
+	CALL	PSGOUT
+	RET
+	
+LFOP6:
+	LD	C,1
+	LD	A,40H
+	ADD	A,(IX+8)
+	LD	E,L
+	BIT	0,C
+	CALL	NZ,LFP62
+	BIT	2,C
+	CALL	NZ,LFP62
+	BIT	1,C
+	CALL	NZ,LFP62
+	BIT	3,C
+	RET	Z
+LFP62:
+	LD	D,A
+	CALL	PSGOUT
+	ADD	A,4
+	RET
+	
+; ---	RESET PEAK L.&DELAY	---
+LFORST:
+	LD	A,(IX+19)
+	LD	(IX+20),A	; LFO DELAY の再設定
+	RES	5,(IX+31)	; RESET LFO CONTINE FLAG
+	RET
+LFORST2:
+	LD	A,(IX+27)
+	SRL	A
+	LD	(IX+28),A	; LFO PEAK LEVEL 再設定
+	LD	A,(IX+23)	;
+	LD	(IX+25),A	; 変化量　再設定
+	LD	A,(IX+24)	;
+	LD	(IX+26),A
+	RET
+	
+SSG:
+
+; -----------------------------------------------------------------    
+; SSG音源演奏ルーチン
+; @note SSGメイン処理
+SSGSUB:
+	LD      A,(IX)      ; 音符の残りの長さ
+	DEC     A
+	LD      (IX),A
+	JR      Z,SSSUB7    ; 次の音符へ
+
+	LD      B,(IX+18)	;  'q'
+	CP      B
+	JR      NZ,SSSUB0	; 音符終了
+	
+	LD      H,(IX+3)
+	LD      L,(IX+2)	;  HL=SOUND DATA ADD
+	LD      A,(HL)		;  A=DATA
+	CP      0FDH		; COUNT OVER?
+	JR      Z,SSUB0
+
+	CALL    SSSUBA		; TO REREASE
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; 音符の終了処理（長さ終了）
+SSUB0:
+	 RES	6,(IX+31)	;  SET TIE FLAG
+SSSUB0:
+	BIT 	7,(IX+6)	; ENVELOPE CHECK
+	RET 	Z
+	CALL	SOFENV
+	LD	E,A
+/*
+	LD	A,(READY)
+	OR	A
+	JR	NZ,SSSUB02
+	LD	E,0
+*/
+SSSUB02:
+/*
+    LD      D,(IX+7)
+    CALL    PSGOUT
+*/
+	; DCSGのボリュームを出力
+	ld  a,e                 ; volchange
+	call    ConvVol2DCSG
+	or  a,(IX+7)            ; Vol | Reg
+	call    DCSGOUT
+
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; 次の音符の処理 
+SSSUB7:
+	LD	H,(IX+3)
+	LD	L,(IX+2)	;  HL AS SOUND DATA ADD
+	LD	A,(HL)		;  A=DATA
+	CP	0FDH		; COUNT OVER?
+	JR	NZ,SSSUBE
+
+SSUB1:
+	RES     6,(IX+31)	;  SET TIE FLAG
+	INC     HL
+	JP      SSSUBB
+
+SSSUBE:
+	SET     6,(IX+31)
+SSSUBB:                     ; SSG サブコマンド終了後にここに戻る
+	LD      A,(HL)
+	OR      A               ;  CHECK END MARK
+	JR      NZ,SSSUB2
+	SET     0,(IX+31)
+	LD      D,(IX+5)
+	LD      E,(IX+4)	;  HL=DATA TOP ADD
+	LD      A,E
+	OR      D
+	JP      Z,SSGEND
+	EX      DE,HL
+SSSUB1:
+	LD      A,(HL)	;  INPUT FLAG &LENGTH
+
+SSSUB2:
+	INC     HL
+	CP      0F0H	;  COMMAND OF PSG?
+	JP      NC,SSSUB8       ; SSG サブコマンド
+
+	RLCA
+	SRL     A		    ;  CY=REST FLAG 休符は0x80のフラグが立っている
+	LD      (IX+0),A	;  SET WAIT COUNTER
+	JR      NC,SSSUB6	;  休符なら ↓SSSUBA
+	CALL    SSSUBA
+	JP      SETPT
+
+; **	SET FINE TUNE & COARSE TUNE	**
+
+SSSUB6:
+
+	; SEカットイン処理の解除判定
+	ld	a,(SeCutIn)
+	or	a
+	jp	nz,SSSUB6skip
+
+	res		0,(IX+41)	; DCSG出力抑制フラグをクリア(IX+41 0Bit)
+
+SSSUB6skip
+	LD      A,(HL)		;  LOAD OCT & KEY CODE ：音符データ
+	INC     HL
+	
+	BIT     6,(IX+31)
+	JR      NZ,SSSKIP0	;  NON TIE
+	
+	LD      C,A
+	LD      B,(IX+32)
+	SUB     B
+	JP      Z,SETPT		; IF NOW CODE=BEFORE CODE THEN SETPT
+
+	LD	A,C
+
+SSSKIP0:
+	LD	(IX+32),A	; STORE KEY CODE & OCTAVE
+
+	ifdef USE_DEBUG
+	call	DCSG_RangeCk		; for Debug DCSGの演奏範囲かチェック
+	endif
+
+	PUSH	HL
+	LD	B,A
+	AND	00001111B	;  GET KEY CODE
+	ADD	A,A
+	LD	E,A
+	LD	D,0
+	LD	HL,SNUMB    ;  SSG o1 の、周波数 DATA
+	ADD	HL,DE
+	
+	LD	A,(HL)		;  GET FNUM2 :音程上位 0E80Ehの0e
+	INC	HL
+	LD	L,(HL)		;  GET FNUM1 :音程下位 0E80Ehのe8
+	LD	H,A
+					; HLに、FNUN が入る
+
+	LD	D,(IX+10)	;
+	LD	E,(IX+9)	;  GET DETUNE DATA
+	ADD	HL,DE		;  DETUNE PLUS		FNUMにDTが加算(DTはユーザ補正すべき？)
+	LD	(IX+30),H	; SAVE FOR LFO
+	LD	(IX+29),L
+	
+	SRL	B           ; (OCT & KEY CODE)の上位4Bitはオクターブ情報
+	SRL	B
+	SRL	B
+	SRL	B
+	
+	DEC	B
+	INC	B		;  OCTAVE1?
+	JR	Z,SSSUB4	;  1 ﾅﾗ SSSUB4 ﾍ
+	
+SSSUB5:
+	SRL	H               ; 右シフト
+	RR	L               ; Carry付右ローテート
+	DJNZ	SSSUB5		;  OCTAVE DATA ﾉ ｹｯﾃｲ
+	
+SSSUB4:
+/*
+	; SSGに音程を出力
+    LD      E,L         ; 音程の下位
+    LD      D,(IX+8)    ; CHANNEL NO.(0 2 4)
+    CALL    PSGOUT
+    LD      E,H         ; 音程の上位
+    INC     D
+    CALL    PSGOUT
+*/
+	; DCSGに音程を出力
+	call    ConvSSGTone2DCSG        ; hl: h上位4Bit l 下位8Bit
+	ld	a,(IX+8)
+	or	a,h             ; 音程上位
+	or	a,0x80
+	call    DCSGOUT
+	ld	a,l             ; 音程下位
+	call    DCSGOUT
+
+
+	BIT     6,(IX+31)
+	JR      NZ,SSSUBF
+	CALL    SOFENV      ; 計算結果がAに返ってくる
+	JR      SSSUB9
+
+SSSUBF:			; KEYON された時の処理
+	BIT	7,(IX+33)
+	JR	Z,SSSUBG	; NOT HARD ENV.
+	
+; ---	HARD ENV. KEY ON	---
+/*
+	; DCSGはHARD ENVに対応していない
+    LD	E,16            ; HARD ENV.では最大ボリューム
+    LD	D,(IX+7)
+    CALL	PSGOUT		; HARD ENV.KEYON
+
+    ld  a,16
+    call    ConvVol2DCSG
+    or	a,(IX+7)
+    call    DCSGOUT     ; HARD ENV.KEYON
+
+    LD	A,(IX+33)
+    AND	00001111B       ; HARD ENV. TYPE
+    LD	E,A
+    LD	D,0DH
+    CALL	PSGOUT      ; MDにHARD ENV.は存在しない
+	JR	SSSUBH          ; SOFT ENVEをスキップ
+*/
+
+; ---	SOFT ENV. KEYON		---
+SSSUBG:
+	LD	A,(IX+6)
+	AND	00001111B
+	OR	10010000B	;  TO STATE 1 (ATTACK)
+	LD	(IX+6),A
+	
+	LD	A,(IX+12)	;  ENVE INIT
+	LD	(IX+11),A
+	RES	5,(IX+31)	; RESET LFO CONTINE FLAG
+	CALL	SOFEV7
+
+SSSUBH:
+	LD	C,(IX+27)
+	SRL	C
+	LD	(IX+28),C	;  LFO PEAK LEVEL 再設定
+	LD	C,(IX+19)
+	LD	(IX+20),C	;  LFO DELAY の、再設定
+SSSUB9:
+	POP	HL
+	
+; **   VOLUME OUT PROCESS   **
+;
+;  ENTRY A: VOLUME DATA
+;
+SSSUB3:
+	BIT	7,(IX+33)
+	JR	NZ,SETPT	; IF HARD ENVE THEN SETPT
+
+	LD	E,A
+/*
+	LD	A,(READY)
+	OR	A
+	JR	NZ,SSSUB32
+	LD	E,0         ; READYが立っていなければVolume 0
+*/
+SSSUB32:
+/*
+    LD	D,(IX+7)
+    CALL	PSGOUT
+*/
+	; 音量をDCSGに出力
+	ld  a,e
+	call    ConvVol2DCSG
+	or      a,(IX+7)
+	call    DCSGOUT
+
+	; **   SET POINTER   **
+SETPT:
+	LD	(IX+3),H
+	LD	(IX+2),L	;  SET NEXT SOUND DATA ADDRES
+	RET
+
+;---------------------------------------------------
+; DCSG範囲外の低温がリクエストされた回数をカウント
+; a : オクターブとF-Num
+	ifdef USE_DEBUG
+DCSG_RangeCk:
+	push af
+	push bc
+	push hl
+
+	ld	b,a
+
+	srl	a           ; OCT情報
+	srl	a 
+	srl	a 
+	srl	a 
+
+	cp	2
+	jp	nc,DCSG_RangeCk_end			; O3以上(2以上)なら演奏可能
+
+	ld	a,b
+	and	00001111B	;  GET KEY CODE
+	;          0    1    2    3    4    5    6    7    8    9    a    b
+	;'         c    c+   d    d+   e    f    f+   g    g+   a    a+   b
+	;'FNUM_00=$3FF,$3FF,$3FF,$3FF,$3FF,$3FF,$3FF,$3FF,$3FF,$3FF,$3FF,$3FF
+	;'FNUM_00=$3FF,$3FF,$3FF,$3FF,$3FF,$3FF,$3FF,$3FF,$3FF,$3F9,$3C0,$38A
+
+	cp	9
+	jp	nc,DCSG_RangeCk_end
+
+	ld	a,(DCSG_OCT_UNDER)
+	inc	a
+	ld	(DCSG_OCT_UNDER),a
+
+DCSG_RangeCk_end:
+
+	pop	hl
+	pop	bc
+	pop	af
+
+	ret
+
+	endif			/* USE_DEBUG */
+
+;---------------------------------------------------
+SNUMB:				;  SSG o1 の、周波数 DATA
+;; PC88版
+;;	DW	0E80EH,120EH,480DH,890CH,0D50BH,2B0BH
+;;	DW	8A0AH,0F309H,6409H,0DD08H,5E08H,0E607H
+; kumaさんのmucomMD2vgmのドキュメントを参考
+; <https://github.com/kuma4649/mucomMD2vgm/blob/master/mucomMD2vgm/FNUM_SN76489.txt>
+	dw 05c0dh,09c0ch,0e80bh,03c0bh,09c0ah,0040ah,07409h,0ec08h,06c08h,0f007h,08007h,01407h
+
+;-----------------------------------------------------
+;	KEY OFF 時の RR 処理
+SSSUBA:
+	
+; --	HARD ENV. KEY OFF	--
+	
+	BIT	7,(IX+33)
+	JR	Z,SSUBAB	; NOT HARD ENV.
+
+/*
+	LD	E,0				; HARD ENVの処理はマスク
+	LD	D,(IX+7)
+	CALL	PSGOUT		; HARD ENV.KEYOFF
+*/
+
+; --	SOFT ENV. KEY-OFF(KEYOFF)	--
+SSUBAB:
+	BIT	5,(IX+33)
+	JR	Z,SSUBAC
+	RES	6,(IX+31)
+	JP	SSSUB0
+SSUBAC:
+	XOR	A
+	BIT	7,(IX+6)
+	JR	Z,SSSUB3	; Volumeをレジスタにセット
+
+	LD	A,(IX+6)
+	AND	10001111B	; STATE 4 (リリース)
+	LD	(IX+6),A
+	CALL	SOFEV9
+	JR	SSSUB3		; SoftEnv処理をして、Volumeをレジスタにセット
+
+;-----------------------------------------------------
+; サブコマンドの決定
+SSSUB8:
+	AND	0FH		; A=COMMAND No.(0-F)
+	LD	DE,SSSUBB
+	PUSH	DE		; STORE RETURN ADDRES
+	LD	DE,PSGCOM
+	LD	B,A
+	ADD	A,A
+	ADD	A,B		; A*3
+	ADD	A,E
+	LD	E,A
+	ADC	A,D
+	SUB	E
+	LD	D,A		; DE+A*3
+	PUSH	DE
+	RET
+	
+;-----------------------------------------------------
+; **   PSG COMMAND TABLE   **
+PSGCOM:
+	JP	OTOSSG		;F0-音色セット         '@'              1
+	JP	PSGVOL		;F1-VOLUME SET
+	JP	FRQ_DF		;F2-DETUNE
+	JP	SETQ		;F3-COMMAND OF        'q'
+	JP	LFOON		;F4-LFO                             4
+	JP	REPSTF		;F5-REPEAT START SET  '['
+	JP	REPENF		;F6-REPEAT END SET    ']'
+	JP	NOISE		;F7-MIX PORT          'P'                  2
+	JP	NOISEW		;F8-NOIZE PARAMATER   'w'
+	JP	FLGSET		;F9-FLAGSET
+	JP	ENVPST		;FA-SOFT ENVELOPE     'E'
+	JP	VOLUPS		;FB-VOLUME UP    ')'
+	JP	NTMEAN		;FC-
+	JP	TIE
+	JP	RSKIP
+	JP	SECPRC		;FF- to sec com
+
+; -----------------------------------------------------------------------------
+; **	HARD ENVE SET	**
+; @note SubCommand2 FFF1 FM
+HRDENV:
+	LD	E,(HL)
+	INC	HL
+	LD	D,0DH
+	CALL	PSGOUT
+	LD	A,E
+	OR	10000000B	; SET H.E FLAG
+	LD	(IX+33),A	; H.E MODE
+	LD	(IX+6),16
+	RET
+	
+; -----------------------------------------------------------------------------
+; **	HARD ENVE PERIOD	**
+; @note SubCommand2 FFF2 FM
+ENVPOD:
+	LD	E,(HL)
+	INC	HL
+	LD	D,0BH
+	CALL	PSGOUT
+	LD	E,(HL)
+	INC	HL
+	INC	D
+	CALL	PSGOUT
+	RET
+	
+; -----------------------------------------------------------------------------
+; **   WRITE REG   **
+; @note SubCommand FA FM    
+W_REG:
+	LD	D,(HL)
+	INC	HL
+	LD	E,(HL)
+	INC	HL
+	CALL	PSGOUT
+	RET
+	
+; -----------------------------------------------------------------------------
+; **   MIX PORT CONTROL   **
+; @note SubCommand F07    DCSG
+; @note SSGでは、3チャンネル全てに、発生、ノイズ、トーン、トーン＋ノイズを選択可能
+; @note DCSGでは使えない機能
+NOISE:
+	LD	C,(HL)
+	INC	HL
+	
+	LD	B,(IX+8)	; CH NO.
+	
+	LD	A,(PREGBF+5)
+	LD	E,A
+	SRL	B
+	INC	B
+	LD	D,B
+	LD	A,01111011B
+NOISE1:
+	RLCA
+	DJNZ	NOISE1
+	AND	E
+	LD	E,A
+	LD	A,C
+	LD	B,D
+	RRCA
+NOISE2:
+	RLCA
+	DJNZ	NOISE2
+	OR	E
+	LD	D,7
+	LD	E,A
+;;    CALL	PSGOUT          ； DCSGのノイズの扱いを検討する
+
+	LD	A,E
+	LD	(PREGBF+5),A
+
+	; TODO INCするパラメーターを確認 for Debug
+	ifdef USE_DEBUG
+	ld	a,(DCSG_NOISEP)
+	inc	a
+	ld	(DCSG_NOISEP),a
+	endif
+
+	RET
+	
+; -----------------------------------------------------------------------------
+;	ノイズ周波数
+; @note SubCommand F08 DCSG
+; @note DCSGでは使えない機能
+NOISEW:
+	LD	E,(HL)
+	INC	HL
+	LD	D,6
+;;    CALL	PSGOUT      ; DCSGのノイズの扱いを検討する
+	LD	A,E
+	LD	(PREGBF+4),A
+
+	; for Debug
+	ifdef USE_DEBUG
+	ld	a,(DCSG_NOISEW)
+	inc	a
+	ld	(DCSG_NOISEW),a
+	endif
+
+	RET
+	
+; -----------------------------------------------------------------------------
+;	エンベロープ　パラメータセット
+; IN:HL<=SSGDAT 音色データ
+; @note SubCommand FA    DCSG
+;
+; IX+12 から6byte SSGDATからコピー
+ENVPST:
+	EX	DE,HL
+	PUSH	IX
+	POP	HL
+	LD	BC,12           ; IX+12 SOFT ENVE パラメータ  ～17迄
+	ADD	HL,BC
+	EX	DE,HL
+	LD	BC,6
+	LDIR            ; (DE)++ = (HL)++ bd--
+
+	LD	A,(IX+6)
+	OR	10010000B	; 7:SoftEnvFlag 4:attack flag
+	LD	(IX+6),A
+	RET
+	
+; -----------------------------------------------------------------------------
+;	PSG音色セット
+; @note SubCommand F00      DCSG
+OTOSSG:
+	LD	A,(HL)              ; 音色番号
+	AND	00001111B           ; 16音色まで
+
+	INC	HL
+	PUSH	HL
+	CALL	OTOCAL          ; HLに音色のアドレス
+	CALL	ENVPST          ; SSGDATをSoftEnvにセット
+	POP	HL
+	RET
+OTOCAL:
+	LD	HL,SSGDAT
+	ADD	A,A
+	LD	C,A
+	ADD	A,A
+	ADD	A,C	;*6
+	LD	E,A
+	LD	D,0
+	ADD	HL,DE
+	RET
+	
+; -----------------------------------------------------------------------------
+; SSG 音色データ
+SSGDAT:
+	DB	255,255,255,255,0,255	; 0:E ノーマル
+	DB	255,255,255,200,0,10	; 1:コナミ(1)
+	DB	255,255,255,200,1,10	; 2:コナミ(2)
+	DB	255,255,255,190,0,10	; 3:コナミ+LFO(1)
+	DB	255,255,255,190,1,10	; 4:コナミ+LFO(2)
+	DB	255,255,255,170,0,10	; 5:コナミ(3)
+	DB	40,70,14,190,0,15		; 6:セガタイプﾟ
+	DB	120,030,255,255,0,10	; 7:ストリングタイプ
+	DB	255,255,255,225,8,15	; 8:ピアノ・ハープタイプ
+	DB	255,255,255,1,255,255	; 9:NG クローズ　ハイハット
+	DB	255,255,255,200,8,255	; 10:NG オープン　ハイハット
+	DB	255,255,255,220,20,8	; 11:シンセタム・シンセキック
+	DB	255,255,255,255,0,10	; 12:UFO(DQ Warp)
+	DB	255,255,255,255,0,10	; 13:FALLING
+	DB	120,80,255,255,0,255	; 14:ホイッスル
+	DB	255,255,255,220,0,255	; 15:BOM!
+	; 12 ENVE INIT > 11にコピーする
+	; 13 
+	; 14 DECAY
+	; 15 SUSTAIN
+	; 16 SUSTAIN LEVEL
+	; 17 REREASE
+
+; -----------------------------------------------------------------------------
+; **	SSG VOLUME UP & DOWN	**
+; @note SubCommand FB    DCSG
+VOLUPS:
+	LD	D,(HL)
+	INC	HL
+	
+	BIT	7,(IX+33)
+	RET	NZ
+	
+	LD	A,(IX+6)
+	LD	E,A
+	AND	00001111B
+	ADD	A,D
+	CP	16
+	RET	NC
+	LD	D,A
+	LD	A,E
+	AND	11110000B
+	OR	D
+	LD	(IX+6),A
+	RET
+	
+; -----------------------------------------------------------------------------
+; **	PSG VOLUME	** PC88: F Max / MD:0　Max
+; @note SubCommand F01 
+PSGVOL:
+	RES	7,(IX+33)	; RES HARD ENV FLAG
+	
+	LD	A,(IX+6)
+	AND	11110000B       ; CURRENT Volumeを抽出
+	LD	E,A
+	LD	C,(HL)
+PV1:				; Fadeからここが呼び出される
+	LD	A,(TOTALV)
+	ADD	A,C
+	CP	16
+	JR	C,PV2
+	XOR	A       ; 16以上ならエラーで０扱いなの？　ld a,c が正解?
+PV2:
+	OR	E
+	INC	HL
+	LD	(IX+6),A
+	RET
+	
+; -----------------------------------------------------------------------------
+; **	SSG ALL SOUND OFF	**
+; @note DCSGのキーオフ
+/*
+SSGOFF:
+    LD	B,3
+    LD	D,8                     ; SSG Vol. Reg 8/9/10
+    LD	E,0
+SSGOF1:
+    CALL	PSGOUT
+    INC	D
+    DJNZ	SSGOF1
+    RET
+*/
+SSGOFF:
+	; TODO 処理の整理
+				;                cc  vvvv
+	ld a,0x9f	; latch/volume  1001 1111  PSG-A 
+	ld (PSG_IO_ADRS),a
+	ld a,0xbf	; latch/volume  1011 1111  PSG-B
+	ld (PSG_IO_ADRS),a
+	ld a,0xdf	; latch/volume  1101 1111  PSG-C
+	ld (PSG_IO_ADRS),a
+
+	ld a,0xef	; latch/volume  1101 1111  Noise
+	ld (PSG_IO_ADRS),a
+
+	; tone(一番低い音) Loopで纏める
+	ld a,0x80	; tone  1000 0000  PSG-A 1st 下位
+	ld (PSG_IO_ADRS),a
+	ld a,0x00	; tone  0*00 0000  PSG-A 2nd 上位
+	ld (PSG_IO_ADRS),a
+
+	ld a,0xa0	; tone  1000 0000  PSG-B 1st 下位
+	ld (PSG_IO_ADRS),a
+	ld a,0x00	; tone  0*00 0000  PSG-B 2nd 上位
+	ld (PSG_IO_ADRS),a
+
+	ld a,0xc0	; tone  1000 0000  PSG-C 1st 下位
+	ld (PSG_IO_ADRS),a
+	ld a,0x00	; tone  0*00 0000  PSG-C 2nd 上位
+	ld (PSG_IO_ADRS),a
+
+	ld a,0xe0	; tone  1000 0000  Noise 1st 下位
+	ld (PSG_IO_ADRS),a
+
+	RET
+
+; -----------------------------------------------------------------------------
+; **   SSG KEY OFF   **
+SKYOFF:
+	XOR	A
+	LD	(IX+6),A	; ENVE FLAG RESET
+/*	
+    LD	E,A
+    LD	D,(IX+7)
+    CALL	PSGOUT
+   RET
+*/
+	call    ConvVol2DCSG    ; A<= PC88 to MD
+	or      a,(IX+7)        ; SSG VolumeReg. 8 / 9 / 10
+	call    DCSGOUT
+
+	ret
+
+; -----------------------------------------------------------------------------
+; A : SSG Volume Reg.
+; SSGのチャンネルボリュームReg番号からDCSGの番号に変換
+ConvVolReg2DCSG
+	push    hl
+	push	de
+
+;    sub     a,8
+	ld      e,a
+	ld      d,0
+
+	ld      hl,ConvVolReg2DCSGTbl
+	add     hl,de
+	ld      a,(hl)
+
+	pop     de
+	pop	    hl
+	ret
+
+ConvVolReg2DCSGTbl
+;       4   5   6   Noise
+	DB  0x90,0xb0,0xd0,0xe0
+
+; -----------------------------------------------------------------------------
+;A : SSG Tone Reg(1byte目)
+; SSGの音程Reg番号からDCSGの番号に変換
+ConvToneReg2DCSG:
+	push    hl
+	push	de
+
+;;    sub     a,8
+	ld      e,a
+	ld      d,0
+
+	ld      hl,ConvToneReg2DCSGTbl
+	add     hl,de
+	ld      a,(hl)
+
+	pop     de
+	pop	    hl
+	ret
+
+ConvToneReg2DCSGTbl
+;       4   5   6
+	DB  0x80,0xa0,0xc0,0xe0
+
+; -----------------------------------------------------------------------------
+; A : PC88 SSG Volume
+; Ret : A MD DCSG Vol
+ConvVol2DCSG
+	push	hl
+	push	de
+
+	ld      e,a
+	ld      d,0
+	ld      hl,ConvVol2DCSGTbl
+	add     hl,de
+	ld      a,(hl)
+
+	pop	    de
+	pop	    hl
+	ret
+
+; SSGのVolumeはPC88/MDで逆(PC88:MAX 0x0f - 0x00 MIN / MD:MAX 0x00 - 0x0f MIN)
+ConvVol2DCSGTbl
+;          0    1    2    3    4    5    6    7    8    9    a    b    c    d    e    f
+; 本来のDCSG段階で反転
+;    DB  0x0f,0x0e,0x0d,0x0c,0x0b,0x0a,0x09,0x08,0x07,0x06,0x05,0x04,0x03,0x02,0x01,0x00
+; mucom88(OPNAのSSG)の再現性を重視 (kuma); kumaさんのmucomMD2vgmのドキュメントを参考
+; <https://github.com/kuma4649/mucomMD2vgm/blob/master/mucomMD2vgm/FNUM_SN76489.txt>
+	db  0x0f,0x0e,0x0c,0x0a,0x09,0x08,0x06,0x04,0x03,0x02,0x01,0x01,0x01,0x01,0x01,0x00
+
+; -----------------------------------------------------------------------------
+; **	SOFT ENVEROPE PROCESS	**
+SOFENV:
+	BIT	4,(IX+6)	; CHECK ATTACK FLAG(SoftEnvセット時にONになっている)
+	JR	Z,SOFEV2
+					; Attack処理
+	LD	A,(IX+11)   ; IX+12のコピー(現在のボリュームと思われる)
+	LD	D,(IX+13)   ; 
+	ADD	A,D
+	JR	NC,SOFEV1
+	LD	A,0FFH
+SOFEV1:
+	CP	0FFH
+	LD	(IX+11),A
+	JR	NZ,SOFEV7
+	
+	LD	A,(IX+6)
+	XOR	00110000B   ; attack decay をxor
+	LD	(IX+6),A	; TO STATE 2 (DECAY)
+	JR	SOFEV7
+	
+SOFEV2:
+	BIT	5,(IX+6)        ; decay flag
+	JR	Z,SOFEV4
+						; Decay　処理
+	LD	A,(IX+11)
+	LD	D,(IX+14)	; GET DECAY
+	LD	E,(IX+15)	; GET SUSTAIN
+	
+	SUB	D
+	JR	C,SOFEV8
+	CP	E
+	JR	NC,SOFEV3
+SOFEV8:
+	LD	A,E
+SOFEV3:
+	CP	E
+	LD	(IX+11),A
+	JR	NZ,SOFEV7
+	LD	A,(IX+6)
+	XOR	01100000B   ; Sustain/ decayをXor
+	LD	(IX+6),A	; TO STATE 3 (SUSTAIN)
+	JR	SOFEV7
+	
+SOFEV4:
+	BIT	6,(IX+6)    ; sustain
+	JR	Z,SOFEV9
+					; Sustain処理
+	LD	A,(IX+11)
+	LD	D,(IX+16)	;  GET SUSTAIN LEVEL
+	SUB	D
+	JR	NC,SOFEV5
+	XOR	A
+	
+SOFEV5:
+	OR	A
+	LD	(IX+11),A
+	JR	NZ,SOFEV7
+	LD	A,(IX+6)
+	AND	10001111B   ; attack/decay/sustainを寝かせる
+	LD	(IX+6),A	; END OF ENVE
+	JR	SOFEV7
+
+SOFEV9:
+	LD	A,(IX+11)
+	LD	D,(IX+17)    ; GET REREASE
+	SUB	D
+	JR	NC,SOFEVA
+	XOR	A
+SOFEVA:
+	LD	(IX+11),A
+	
+					; **	VOLUME CALCURATE	**
+
+SOFEV7:
+
+	PUSH	HL
+	LD	E,(IX+11)   ; SOFT ENVのボリューム
+	LD	D,0
+	LD	HL,0
+	LD	A,(IX+6)	; GET VOLUME
+	AND	00001111B
+	INC	A
+	LD	B,A
+SOFEV6:
+	ADD	HL,DE
+	DJNZ	SOFEV6
+	LD	A,H
+	POP	HL
+	BIT	6,(IX+31)       ; KeyOff Flag
+	RET	NZ
+	BIT	5,(IX+33)       ; HARD ENV ?
+	RET	Z
+	ADD	A,(IX+17)
+	SRL	A               ; 右シフト
+
+	RET
+	
+; -----------------------------------------------------------------------------
+;	演奏終わり
+FMEND:
+	LD	(IX+2),L
+	LD	(IX+3),H
+	LD	A,(PCMFLG)
+	OR	A
+	JR	NZ,PCMEND
+	CALL	KEYOFF
+
+	set     3,(IX+31)		; このチャンネルは演奏終了
+
+	RET
+
+PCMEND:                     ;; PCMのキーオフはキャンセル
+/*
+	LD	DE,0B00H
+	CALL	PCMOUT
+	LD	DE,0100H
+	CALL	PCMOUT
+	LD	DE,0021H
+	CALL	PCMOUT
+*/
+	RET
+
+SSGEND:
+	LD	(IX+2),L
+	LD	(IX+3),H
+	CALL	SKYOFF
+	RES	7,(IX+31)	; RESET LFO FLAG
+
+	set     3,(IX+31)		; このチャンネルは演奏終了
+
+	RET
+
+; -----------------------------------------------------------------------------
+; **   VOLUME OR FADEOUT etc RESET   **
+;
+WORKINIT:
+	XOR	A
+	LD	(C2NUM),A
+	LD	(CHNUM),A
+	LD	(PVMODE),A
+
+	ld	(FLGADR),a
+
+	ld	(LOOP_MUB),a
+	ld	(MUB_LOOPED),a
+
+	ld	(DCSG_OCT_UNDER),a
+	ld	(DCSG_NOISEP),a
+	ld	(DCSG_NOISEW),a
+
+	ld	(FDCO),a
+	ld	(FDCO+1),a
+	ld	(TOTALV),a
+
+	LD	A,(MUSICNUM)
+;;    LD	HL,MU_TOP		; 曲のパック先頭
+	ld	hl,(Mu_Top)			; 曲のパック先頭
+WI1:
+	LD	DE,MAXCH*4			; チャンネル数*4を足していく　Timerの値が有る所までジャンプ
+	OR	A
+	JR	Z,WI2
+	INC	HL					; (MU_TOP+1)+MAXCH*4に、次の曲のoffsetがある。
+	ADD	HL,DE
+	LD	E,(HL)
+	INC	HL
+	LD	D,(HL)
+;;    LD	HL,MU_TOP
+	ld	hl,(Mu_Top)
+	ADD	HL,DE
+	DEC	A
+	JR	WI1
+WI2:						; .mubのデータ本体
+	LD	A,(HL)				; for Timer-B 曲のテンポ
+	LD	(TIMER_B),A
+	INC	HL
+	LD	(TB_TOP),HL
+	
+	LD	B,6					; FM1-3 SSG 4-6　ワーク初期化
+	LD	IX,CH1DAT
+WI4:
+	PUSH	BC
+	CALL	FMINIT
+	LD	DE,WKLENG
+	ADD	IX,DE
+	POP	BC
+	DJNZ	WI4
+	
+	XOR	A					; リズムチャンネル　ワーク初期化
+	LD	(CHNUM),A
+	LD	IX,DRAMDAT
+	CALL	FMINIT
+	
+	XOR	A					; FM 4-6 ADPCM　ワーク初期化
+	LD	(CHNUM),A
+	LD	B,4
+	LD	IX,CHADAT
+WI6:
+	PUSH	BC
+	CALL	FMINIT
+	LD	DE,WKLENG
+	ADD	IX,DE
+	POP	BC
+	DJNZ	WI6
+
+	RET
+	
+; -----------------------------------------------------------------------------
+; IX< : 該当チャンネルワークの先頭
+; @note チャンネルワークの初期化と譜面のアドレスをセット
+; -----------------------------------------------------------------------------
+FMINIT:
+	PUSH	IX
+	POP	HL
+	LD	E,L
+	LD	D,H
+	INC	DE
+	LD	(HL),0
+	LD	BC,WKLENG-1
+	LDIR
+	
+	LD	(IX),1
+	LD	(IX+6),0
+	
+	LD	HL,(TB_TOP)	; HL=TABLE TOP ADR (Ch)
+	
+	LD	E,(HL)              ; TB_TOP[0].w
+	INC	HL
+	LD	D,(HL)
+	INC	HL
+	PUSH	HL
+;;    LD	HL,MU_TOP
+	ld	hl,(Mu_Top)
+	ADD	HL,DE
+	LD	(IX+2),L            ; DATA ADRESS WORK
+	LD	(IX+3),H
+	POP	HL
+	LD	E,(HL)              ; TB_TOP[2].w
+	INC	HL
+	LD	D,(HL)
+	LD	A,E
+	OR	D
+	JR	Z,FMI2
+;;    LD	HL,MU_TOP
+	ld	HL,(Mu_Top)
+	ADD	HL,DE
+	LD	(IX+4),L            ; DATA TOP ADRESS
+	LD	(IX+5),H
+
+	call	noloop_ck		; Loop曲かをチェック
+
+FMI2:
+	LD	HL,C2NUM
+	INC	(HL)                ; C2NUM++
+	LD	HL,(TB_TOP)
+	LD	DE,4
+	ADD	HL,DE
+	LD	(TB_TOP),HL         ; TB_TOP+4 次のチャンネルのTB_TOP
+	
+	LD	A,(CHNUM)
+	CP	3
+	JR	NC,SSINIT
+	
+							; FMのチャンネル設定
+	LD	(IX+8),A            ; チャンネルナンバーセット
+	INC	A
+	LD	(CHNUM),A
+
+	RET
+
+; -----------------------------------------------------------------------------
+; Loop曲かチェック
+noloop_ck:
+	push	hl
+
+	ld	hl,LOOP_MUB
+
+	ld	a,(IX+4)
+	or	a
+	jr	z,noloop_ck00
+
+	ld	(hl),1		; Loop曲
+
+noloop_ck00:
+	ld	a,(IX+5)
+	or	a
+	jr	z,noloop_ck01
+
+	ld	(hl),1		; Loop曲
+
+noloop_ck01:
+
+	pop	hl
+	ret
+
+; -----------------------------------------------------------------------------
+; DB	8	; VOL.REG.No.		7
+; DB	0	; CHANNEL No.		8
+; ---   FOR SSG   ---
+;　チャンネルデータと連動するチャンネル番号
+; ---   FOR DCSG   ---
+; 出力するパラメータを保持。
+; -----------------------------------------------------------------------------
+SSINIT:
+/*
+	ADD	A,5             ; 3+lp + 5 = 8,9,10(SSG:m+Vol Reg)
+	LD	(IX+7),A        ; VOL
+	LD	A,(CHNUM)
+	SUB	A,3
+	ADD	A,A
+	LD	(IX+8),A            ; 0/2/4 Channel No. TONE
+							; 3 - 3 = 0*2 = 0
+							; 4 - 3 = 1*2 = 2
+							; 5 - 3 = 2*2 = 4
+	LD	A,(CHNUM)
+	INC	A
+	LD	(CHNUM),A
+	RET
+*/
+
+	sub a,3
+	call ConvVolReg2DCSG
+	ld  (IX+7),a        ; VOL Reg
+
+	ld  a,(CHNUM)
+
+	sub	a,3
+	call ConvToneReg2DCSG
+	ld	(IX+8),a
+
+	LD	A,(CHNUM)
+	INC	A
+	LD	(CHNUM),A
+
+	ret
+	
+; -----------------------------------------------------------------------------
+; **	CHANGE SE MODE	**
+; PL_SNDの処理を書き換えています。
+; -----------------------------------------------------------------------------
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; 通常モードに移行
+TO_NML
+	LD	A,38H
+	LD	(PLSET1+1),A
+	LD	A,3AH
+TNML2:
+	LD	(PLSET2+1),A
+	LD	D,27H
+	LD	E,A
+	CALL	PSGOUT
+	RET
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; EFCTモードに移行
+TO_EFC:
+	LD	A,78H
+	LD	(PLSET1+1),A
+	LD	A,7AH
+	JR	TNML2
+
+; -----------------------------------------------------------------------------
+; ***	ADPCM	PLAY	***
+;
+;	IN:(STTADR)<=　再生スタート　アドレス
+;	   (ENDADR)  <=　再生エンド　アドレス
+;	   (DELT_N)<=　再生レート
+; -----------------------------------------------------------------------------
+PLAY
+/*
+	LD	A,(READY)
+	OR	A
+	RET	Z
+*/
+
+/*
+	PUSH	HL
+	
+	LD	DE,0B00H        ; 無音に設定
+	CALL	PCMOUT
+	LD	DE,0100H        ; コントロールレジスタの初期化(LR/Ramアクセス/DA変換など)
+	CALL	PCMOUT
+	
+	LD	DE,0021H        ; リピート有効・音声合成リセット
+	CALL	PCMOUT
+	LD	DE,1008H        ;BRDYフラグをマスク
+	CALL	PCMOUT
+	LD	DE,1080H        ; IRQリセットとスタータスフラグを０
+	CALL	PCMOUT      ; INIT
+	
+						; 波形アドレス --------------------------------
+	LD	HL,(STTADR)
+	LD	D,2
+	LD	E,L
+	CALL	PCMOUT		; START ADR
+	INC	D
+	LD	E,H
+	CALL	PCMOUT
+	
+	LD	HL,(ENDADR)
+	LD	D,4
+	LD	E,L
+	CALL	PCMOUT		; END ADR
+	INC	D
+	LD	E,H
+	CALL	PCMOUT
+	
+						; サンプリング周波数 -------------------------
+	LD	D,09H
+	LD	A,(DELT_N)	; 再生レート　下位
+	LD	E,A
+	CALL	PCMOUT
+	LD	D,0AH
+	LD	A,(DELT_N+1)	; 再生レート　上位
+	LD	E,A
+	CALL	PCMOUT
+	
+	LD	DE,00A0H        ; ADPCMスタート・外部メモリから読み込む（SB2内蔵のメモリって事）
+	CALL	PCMOUT
+	
+						; ボリューム関係 ----------------------------------
+	LD	D,0BH
+	LD	E,(IX+6)
+	LD	A,(TOTALV)
+	ADD	A,A
+	ADD	A,A
+	ADD	A,E
+	CP	250             ; a - 250
+	JR	C,PL1           ; a < 250 なら jump
+	XOR	A               ; 250 <= Volumeなら、補正値だけになる
+PL1:
+	LD	E,A             ; E PCM Volume
+	LD	A,(PVMODE)
+	OR	A
+	JR	Z,PL2           ; PVMODE = 0　なら、TOTALV
+	LD	A,(IX+7)        ; PVMPDE = 1　なら、補正値を加算
+	ADD	A,E
+	LD	E,A
+PL2:
+	CALL	PCMOUT		; VOLUME
+	
+	LD	D,01H           ; LR
+	LD	A,(PCMLR)
+	RRCA
+	RRCA
+	AND	11000000B
+	LD	E,A
+	CALL	PCMOUT		; 1 bit TYPE,L&R OUT
+	
+	LD	A,(PCMNUM)
+	LD	(P_OUT),A	; 信号出す
+	
+	POP	HL
+*/
+	RET
+	
+	
+; -----------------------------------------------------------------------------
+; ***	ADPCM	OUT	***
+;
+;   @note ADPCMのIOを出力する
+;   @note PC88専用なので、outをマスク
+
+PCMOUT:
+/*
+	PUSH	BC
+
+	LD	A,(PORT13+1)
+	LD	C,A
+PCMO2:
+	IN	A,(C)
+	JP	M,PCMO2
+	
+	OUT	(C),D
+PCMO3:
+	IN	A,(C)
+	JP	M,PCMO3
+	INC	C
+	
+    OUT	(C),E
+	
+	POP	BC
+*/
+	RET
+	
+; -----------------------------------------------------------------------------
+; OUT: IX<=Soundbord Check Work ADRS
+; @note SoundBoard2が有効か？
+/*
+INFADR:
+	LD	IX,NOTSB2
+	RET
+*/
+
+; -----------------------------------------------------------------------------
+;	割り込み設定/ボードチェック　その他
+;     @note SB2のチェックなのでMDには不要
+/*
+CHK:
+
+	XOR	A
+	LD	(NOTSB2),A
+	
+	LD	HL,TYPE1		; M_VECTORにTYPE1を設定
+	LD	DE,M_VECTR
+	LDI
+	LDI
+	LDI
+	
+	LD	C,044H
+	CALL	STT1
+	DEC	A
+	JR	Z,STTE
+	LD	C,0A8H
+	CALL	STT1
+	DEC	A
+	JR	Z,STT2
+	LD	(NOTSB2),A
+	JR	STTE
+STT2:
+	LD	HL,TYPE2
+	LD	DE,M_VECTR
+	LDI
+	LDI
+	LDI
+	JR	STTE
+	
+; --	CHECK BORD TYPE	--
+	
+STT1:
+	LD	A,0FFH
+	OUT	(C),A
+	PUSH	BC
+	POP	BC
+	INC	BC
+	IN	A,(C)
+	RET
+	
+STTE:
+	RET
+*/
+
+
+; =============================================================================
+; =============================================================================
+; 変数
+; =============================================================================
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+VSYNCFLAG:    DB  0
+
+; -----------------------------------------------------------------------------
+;	MUSIC WORK
+	
+;NOTSB2:     DB	0	; 0:OPN 1:OPNA
+PVMODE:     DB	0	;PCMvolMODE
+;READY:      DB	0	;KEYON ENA/DISA
+P_OUT:      DB	0
+;M_VECTR:    DB	0	; TYPE1かTYPE2が入る
+;PORT13:     DW	0	; TYPE1かTYPE2が入る
+TOTALV:     DB	0
+FDCO:       DB	0,0
+	
+SSGF1:			;  SSG 4-6CH  PLAY FLAG
+		DB	0
+DRMF1:	DB	0
+KEYBUF:	DB	0
+FMPORT:	DB	0	; 0:FM1-3  4:FM4-6
+FNUM:	DW	0
+TYPE1:	DB	032H,044H,046H	; 割り込み 許可・不許可と、FM1-3・FM4-6のポートアドレス(内蔵)
+TYPE2:	DB	0AAH,0A8H,0ACH	; 割り込み 許可・不許可と、FM1-3・FM4-6のポートアドレス(SB2)
+	
+; -----------------------------------------------------------------------------
+;	ボリュームデータ
+FMVDAT:                     ; ボリュームデータ (FM)
+	DB	36H,33H,30H,2DH
+	DB	2AH,28H,25H,22H		;  0,  1,  2,  3
+	DB	20H,1DH,1AH,18H		;  4,  5,  6,  7
+	DB	15H,12H,10H,0DH		;  8,  9, 10, 11
+	DB	0AH,08H,05H,02H		; 12, 13, 14, 15
+
+CRYDAT:			; キャリア / モジュレータのデータ
+	DB	08H	;
+	DB	08H	; 各ビットがキャリア/モジュレータを表わす
+	DB	08H	;
+	DB	08H	; Bit=1 が、キャリア
+	DB	0CH	;      0 が、モジュレータ
+	DB	0EH	;
+	DB	0EH	; Bit0=OP 1 , Bit1=OP 2 ... etc
+	DB	0FH	;
+	
+; -----------------------------------------------------------------------------
+;	PMS/AMS/LR DATA
+PALDAT:
+	DB	0C0H
+	DB	0C0H
+	DB	0C0H
+	DB	0	; DUMMY
+	DB	0C0H
+	DB	0C0H
+	DB	0C0H
+PCMLR:
+	DB	0
+	
+; -----------------------------------------------------------------------------
+;	SOUND WORK (FM)
+CH1DAT:
+	DB	1	; LENGTH カウンター		IX+ 0
+	DB	24	; 音色ナンバー		1
+	DW	0	; DATA ADDRES WORK	2,3
+	DW	0	; DATA TOP ADDRES	4,5
+	DB	10	; VOLUME DATA		6
+	DB	0	; アルゴリズム No.		7
+	DB	0	; チャンネルナンバー	8
+	DW	0	; デチューン DATA		9,10
+	DB	0	;			11
+	DB	0	; for リバーブﾞ		12
+	DS	5	; SOFT ENVE DUMMY	13-17
+	DB	0	; qオンタイズ		18
+
+	DB	0	; LFO DELAY		19
+	DB	0	; WORK			20
+	DB	0	; LFO COUNTER		21
+	DB	0	; WORK			22
+	DW	0	; LFO 変化量 2BYTE	23,24
+	DW	0	; WORK			25,26
+
+	DB	0	; LFO PEAK LEVEL	27
+	DB	0	; WORK			28
+	DB	0	; FNUM1 DATA		29
+	DB	0	; B/FNUM2 DATA		30
+	DB	00000001B	;bit 7=LFO FLAG	31
+	
+			; bit	6=KEYOFF FLAG
+			;	5=LFO CONTINUE FLAG
+			;	4=TIE FLAG
+			;	3=MUTE FLAG			>> PLAY END FLAG
+			;	2=LFO 1SHOT FLAG
+			;
+			;	0=1LOOPEND FLAG
+	DB 	0	; BEFORE CODE		32
+	DB	0	; bit	6=		33
+			;	5=REVERVE FLAG
+			;	4=REVERVE MODE
+	DW	0	;	リターンアドレス	34,35
+	DB	0,0     ; 36,37 (空き)                  ; 0 - 37迄の38個
+;;    DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+	DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+
+
+CH2DAT:         ; FM2
+	DB	1
+	DB	24
+	DW	0000H
+	DW	0000H
+	DB	10
+	DB	0
+	DB	1
+	DW	0000H
+	DS	7
+	DB	0	;18
+
+	DB	0
+	DB	0
+	DB	0
+	DB	0
+	DW	0
+	DW	0
+
+	DB	0
+	DB	0
+	DB	0
+	DB	0
+	DB	00000010B
+	DW	0,0,0
+;;    DW	0,0             ;; 2Byte削る
+
+;;   DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+   DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+
+CH3DAT:         ; FM 3
+	DB	1
+	DB	24
+	DW	0000H
+	DW	0000H
+	DB	10
+	DB	0
+	DB	2
+	DW	0000H
+	DS	7
+	DB	0	;18
+
+	DB	0
+	DB	0
+	DB	0
+	DB	0
+	DW	0
+	DW	0
+
+	DB	0
+	DB	0
+	DB	0
+	DB	0
+	DB	00000011B
+	DW	0,0,0
+;;    DW	0,0             ;; 2Byte削る
+
+;;   DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+	DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+	
+; -----------------------------------------------------------------------------
+;	WORK (SSG)
+
+CH4DAT:         ; SSG 1
+	DB	1		; COUNTER WORK		0
+	DB	0		; 音色 No.		1
+	DW	0000H	; DATA ADRS WORK	2,3
+	DW	0000H	; DATA TOP ADRS		4,5
+	DB	8		; CURENT VOLUME(bit0-3)	6
+				; bit 4 = attack flag
+				; bit 5 = decay flag
+				; bit 6 = sustain flag
+				; bit 7 = soft envelope flag
+	
+	DB	8   ; VOL.REG.No.		7       ; TODO DCSGのレジスタ番号を入れるべき
+	DB	0   ; CHANNEL No.          	8
+	DW	0   ; FOR DETUNE		9,10
+	DB	0   ; SOFT ENVE COUNTER	11
+	DS	6   ; SOFT ENVE		12-17
+	
+	DB	0	; COUNTER OF 'q'	18
+	
+	DB	0	; LFO DELAY		19
+	DB	0	; WORK			20
+	DB	0	; LFO COUNTER		21
+	DB	0	; WORK			22
+	DW	0	; LFO 変化量 2BYTE	23,24
+	DW	0	; WORK			25,26
+
+	DB	0	; LFO PEAK LEVEL	27
+	DB	0	; WORK			28
+	DB	0	; FNUM1 DATA		29
+	DB	0	; B/FNUM2 DATA		30
+	DB	00000100B	; bit 7=LFO FLAG	31
+			; bit	6=KEYOFF FLAG
+			; bit	5=LFO CONTINUE FLAG
+			; bit	4=TIE FLAG
+			;	3=MUTE FLAG
+	
+			;	0=1LOOPEND FG
+	DB	0	; BEFORE CODE		32
+	DB      0       ; bit 7 = HARD ENVE FLAG 33
+			; bit 0-3 = HARD ENVE TYPE
+	DW	0
+	DB	0,0
+
+;;    DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+	DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+
+CH5DAT:             ; SSG 3
+	DB	1
+	DB	0
+	DW	0000H
+	DW	0000H
+	DB	8
+	
+	DB	9
+	DB	2
+	DW	0
+	DB	0
+	DS	6           ; 18
+	
+	DB	0
+	
+	DB	0
+	DB	0
+	DB	0
+	DB	0
+	DW	0
+	DW	0
+	
+	DB	0
+	DB	0
+	DB	0
+	DB	0
+	DB	00000101B
+	DW	0,0,0
+;;    DW	0,0             ;; 2Byte削る
+;;    DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+	DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+
+CH6DAT:             ; SSG 3
+	DB	1
+	DB	0
+	DW	0000H
+	DW	0000H
+	DB	8
+	
+	DB	10
+	DB	4
+	DW	0
+	DB	0
+	DS	6
+	
+	DB	0
+	
+	DB	0
+	DB	0
+	DB	0
+	DB	0
+	DW	0
+	DW	0
+	
+	DB	0
+	DB	0
+	DB	0
+	DB	0
+	DB	00000110B
+	DW	0,0,0
+;;    DW	0,0             ;; 2Byte削る
+
+;;    DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+	DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+
+DRAMDAT:                ; RHYTHM
+	DB	1,0             ; 0,1
+	DW	0,0             ; 2 3,4 5
+	DB	10,0,2          ; 6,7,8
+	DW	0               ; 9 10
+	DS	7               ; 11,12,13,14,15,16,17
+	DB	0	;18         ; 18
+	DS	19,0            ; 19,20,21,22,23,24,25,26,27,28
+						; 29,30,31,32,33,34,35,36,37　０で埋める
+
+;;    DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+	DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+
+CHADAT:                 ; FM 4
+	DB	1,0
+	DW	0,0
+	DB	10,0,2
+	DW	0
+	DS	7
+	DB	0	;18
+	DS	19,0
+
+;;    DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+	DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+
+CHBDAT:                 ; FM 5
+	DB	1,0
+	DW	0,0
+	DB	10,0,2
+	DW	0
+	DS	7
+	DB	0	;18
+	DS	19,0
+
+;;    DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+	DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+
+CHCDAT:                 ; FM 6
+	DB	1,0
+	DW	0,0
+	DB	10,0,2
+	DW	0
+	DS	7
+	DB	0	;18
+	DS	19,0
+
+;;    DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+	DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+
+PCMDAT:                 ; ADPCM WORK
+	DB	1,0
+	DW	0,0
+	DB	10,0,2
+	DW	0
+	DS	7
+	DB	0	;18
+	DS	19,0
+
+;;    DB	0,0     ; 36,37 (空き) >>>> 36:Loop Ptr 37:　Loop Ctr
+	DB	0,0,0,0     ; 38,39,40,41 Loop Ctr
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; @note 場所変更
+RHYTHM:	DB	0
+	
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+WKLENG:	EQU	CH2DAT-CH1DAT
+	
+; -----------------------------------------------------------------------------
+;	PSG REGISTOR WORK (Noise関係 MDには不要)
+PREGBF:
+	DB	0,0,0,0,0,0,0,0,0
+INITPM:		;ノイズの初期値
+	DB	0,0,0,0,0,56,0,0,0
+	
+; -----------------------------------------------------------------------------
+;	SE MODE(MODE2) の、デチューンワーク
+
+DETDAT:
+	DB	0	;		OP1
+	DB	0	;		OP2
+	DB	0	;		  3
+	DB	0	;		  4
+	
+; -----------------------------------------------------------------------------
+;	DRAM VOLUME DATA
+	
+DRMVOL:
+	DB	0C0H	; BASS
+	DB	0C0H	; SNEA
+	DB	0C0H	; SYMB
+	DB	0C0H	; HI-HAT
+	DB	0C0H	; TAM
+	DB	0C0H	; RIM
+	
+NEWFNM:
+	DW	0
+OP_SEL:
+	DB	0A6H,0ACH,0ADH,0AEH	; OP 4,3,1,2
+	
+CHNUM:
+	DB	0
+C2NUM:	
+	DB	0
+TB_TOP:
+	DW	0
+TIMER_B:
+	DB	100
+	
+; -----------------------------------------------------------------------------
+;	ADPCM WORK & Table
+; 
+	
+PCMNMB:		; C-B 迄の　再生サンプリングレート
+	DW	49BAH+200,4E1CH+200,52C1H+200,57ADH+200
+	DW	5CE4H+200,626AH+200,6844H+200,6E77H+200
+	DW	7509H+200,7BFEH+120,835EH+200,8B2DH+200
+	
+STTADR:
+	DW	0
+ENDADR:
+	DW	0
+DELT_N:
+	DW	0	; 再生レート
+PCMNUM:
+	DB	0
+PCMFLG:	DB	0
+	
+FNUMB:
+; PC88
+/*
+    DW	26AH,28FH,2B6H,2DFH,30BH,339H
+    DW	36AH,39EH,3D5H,410H,44EH,48FH
+*/
+; kumaさんのmucomMD2vgmのドキュメントを参考
+; <https://github.com/kuma4649/mucomMD2vgm/blob/master/mucomMD2vgm/FNUM_YM2612.txt>
+	dw 289h , 2afh , 2d8h , 303h , 331h , 362h , 395h , 3cch , 405h , 443h , 484h , 4c8h
+
+
+; -----------------------------------------------------------------------------
+; Mub関係
+MusicNum
+		dw 0		;		EQU	WORK_RAM_ADDR+0x30          ; 1byte c200h
+OtoDat	
+		dw 0		;		EQU	WORK_RAM_ADDR+0x32          ; used 4byte aline(不要だけどね)
+Mu_Top
+		dw 0		;			EQU	WORK_RAM_ADDR+0x34          ; used 2
+
+MUSICNUM
+		db 0		;	   EQU	WORK_RAM_ADDR+0x36          ; 1byte c200h
+
+SePlayStat			; SE演奏中のチャンネルのBITが立つ
+	db  0
+
+SeCutIn				; Seに割り込まれている(現在のDCSGをSEとして処理する)
+	db  0
+
+; =============================================================================
+; 演奏全体のコントロール関係
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; 曲の終了・曲のループ確認
+; @note 1LOOPしたら、SND_STATUSをMUB_STATE_LOOPに変更
+; -----------------------------------------------------------------------------
+TSC:
+	LD	C,MAXCH			; 演奏中チャンネル数
+	LD	B,MAXCH			; 11回ループ
+	LD	A,1
+TSC2:
+	PUSH	BC
+	LD	B,A
+	CALL	WKGET       ; Bが引数 IXに返る
+	POP	BC
+	BIT	0,(IX+31)       ; LOOPEND FLAG(曲が終了していたら)
+	JR	Z,TSC3
+	DEC	C
+TSC3:
+	INC	A
+	DJNZ	TSC2        ; B 11回ループ
+	LD	A,C
+	OR	A
+	RET	NZ              ; 演奏中チャンネルが有れば戻る
+
+	; 大ループを1回以上超えた
+	ld	a,1
+	ld	(MUB_LOOPED),a
+
+
+	; TODO : LOOP_MUBにループ無し曲のスラグを立てられたら、曲停止処理を挟める
+	ld a,(LOOP_MUB)
+	or	a
+	jp	nz,TSC4			; != 0 LOOP曲
+	
+	call MSTOP			;  非LOOP曲が終了
+
+TSC4:
+
+	RET
+
+; -----------------------------------------------------------------------------
+; チャンネルデータのアドレスを取得
+; IN : B<=1-11 取得するデータの番号
+; RET IX : チャンネルデータ
+; -----------------------------------------------------------------------------
+WKGET:
+	PUSH    DE
+	LD      IX,CH1DAT-WKLENG
+	LD      DE,WKLENG
+WG2:
+	ADD     IX,DE
+	DJNZ    WG2
+	POP     DE
+	RET
+
+; =============================================================================
+; =============================================================================
+; SE Routine
+; =============================================================================
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; SEのチャンネルワークと各種ワークの初期化
+; -----------------------------------------------------------------------------
+SeInit:
+	; コントロールクリア
+	xor	a
+	ld  (SePlayStat),a
+	ld	(SE_STATE_BIT),a
+
+	; ChDatの初期化
+	ld	hl,SeCh1Dat
+	ld	a,0
+	call SeDatClear
+
+	ld	hl,SeCh2Dat
+	ld	a,1
+	call SeDatClear
+
+	ld	hl,SeCh3Dat
+	ld	a,2
+	call SeDatClear
+
+	ret
+
+; -----------------------------------------------------------------------------
+; チャンネルワークのクリアと、DCSGのTone/Volumeレジスタを登録
+; IX : チャンネルワークアドレス
+; -----------------------------------------------------------------------------
+SeDatClear:
+	push	bc
+	push	hl
+
+	ld	e,l			; ChWork Clear 分割する
+	ld	d,h
+	inc	de
+	ld	(hl),0
+	ld	bc,WKLENG-1
+	ldir
+
+	pop	ix
+
+; DSCGのレジスタセット a:Channel ix ChannelDat
+SeDatRegSet:
+	ld      e,a
+	ld      d,0
+
+	ld      hl,ConvVolReg2DCSGTbl
+	add     hl,de
+	ld      a,(hl)
+	ld	    (ix+7),a
+
+
+	ld      hl,ConvToneReg2DCSGTbl
+	add     hl,de
+	ld      a,(hl)
+	ld	    (ix+8),a
+
+	pop		bc
+	ret
+
+; -----------------------------------------------------------------------------
+; TODO SeDatClearの高速版(レジスタの内容を残して0クリアを行う)
+; IX : チャンネルデータ
+; -----------------------------------------------------------------------------
+SeDatClear2:
+	ret
+
+; -----------------------------------------------------------------------------
+; SE Main
+; メインループから呼び出す
+; -----------------------------------------------------------------------------
+SeMain:
+	di
+
+	ld		a,SET_SE_BANK
+	call	SetBank
+
+	ld	a,0x0ff			; Mucom本体をSSG演奏モードで動作させる
+	ld	(SSGF1),a
+
+	call    SeRequestCk	; SEのリクエストを確認
+
+	; 演奏中のチャンネルを処理する
+	; SE 1CH
+	ld  a,(SePlayStat)
+	bit SE_PLAY_BIT1,a
+	jp	z,SeSkip01
+
+	ld	ix,SeCh1Dat
+	call    SeDrive
+
+SeSkip01:
+	; SE 2Ch
+	ld  a,(SePlayStat)
+	bit SE_PLAY_BIT2,a
+	jp	z,SeSkip02
+
+	ld	ix,SeCh2Dat
+	call    SeDrive
+
+SeSkip02:
+	; SE 3Ch
+	ld  a,(SePlayStat)
+	bit SE_PLAY_BIT3,a
+	jp	z,SeSkip03
+
+	ld	ix,SeCh3Dat
+	call    SeDrive
+
+SeSkip03:
+
+	xor	a					; SSG演奏モード終了
+	ld	(SSGF1),a
+
+	; 演奏状態をコピー
+	ld  a,(SePlayStat)
+	ld	(SE_STATE_BIT),a
+
+	ei
+	ret
+
+; -----------------------------------------------------------------------------
+; SeDrive SEの演奏を行う
+; IX : チャンネルワークアドレス
+; -----------------------------------------------------------------------------
+SeDrive:
+	call    SSGENT
+	bit	0,(IX+31)				; LoopEndFlag
+    jp	z,sedrive_skip_last		; LoopEndFlagが立つまで演奏 
+
+	; 各チャンネルの演奏終了（TODO まとめる）
+	ld	   a,(ix+8)
+	cp  0x80                    ; DCSG 1ch Reg
+	jp	nz,sedrive_skip80
+
+	ld     a,(SePlayStat)
+	res     SE_PLAY_BIT1,a
+	ld     (SePlayStat),a
+
+	call SeRegClear				; 無音に設定して異音を消す
+
+	ret
+
+sedrive_skip80:
+	cp  0xa0                    ; DCSG 2ch Reg
+	jp	nz,sedrive_skipa0
+
+	ld     a,(SePlayStat)
+	res     SE_PLAY_BIT2,a
+	ld     (SePlayStat),a
+
+	call SeRegClear
+
+	ret
+
+sedrive_skipa0:
+	;cp  0xc0                    ; DCSG 3ch Reg
+	;jp	nz,sedrive_skip80
+	ld     a,(SePlayStat)
+	res     SE_PLAY_BIT3,a
+	ld     (SePlayStat),a
+
+	call SeRegClear
+
+sedrive_skip_last:
+
+	ret
+
+; -----------------------------------------------------------------------------
+; DCSGがBGMに戻る時にノイズが出ないように、無音に設定
+; IX : チャンネルワークアドレス
+; -----------------------------------------------------------------------------
+SeRegClear:
+	ld	a,0x0f				; MD miniman Volume
+	or  a,(IX+7)            ; Vol | Reg
+	call    DCSGOUT
+	ret
+
+; -----------------------------------------------------------------------------
+; SEリクエストのチェック
+; -----------------------------------------------------------------------------
+SeRequestCk:
+	; Se Cannnel 1
+	ld  a,(REQ_EFCT1)
+	and	a
+	jp  z,req_skip00
+
+	ld a,0				; Channel A
+	ld hl,SeCh1Dat
+	ld bc,REQ_EFCT1
+	call SeRequest
+
+	xor	a					; 64Kからのリクエスト削除
+	ld  (REQ_EFCT1),a
+
+req_skip00:
+	; Se Cannnel 1
+	ld  a,(REQ_EFCT2)
+	and	a
+	jp  z,req_skip01
+
+	ld a,1				; Channel B
+	ld hl,SeCh2Dat
+	ld bc,REQ_EFCT2
+	call SeRequest
+
+	xor	a					; 64Kからのリクエスト削除
+	ld  (REQ_EFCT2),a
+
+req_skip01:
+	ld  a,(REQ_EFCT3)
+	and	a
+	jp  z,req_skip02
+
+	ld a,2				; Channel C
+	ld hl,SeCh3Dat
+	ld bc,REQ_EFCT3
+	call SeRequest
+
+	xor	a					; 64Kからのリクエスト削除
+	ld  (REQ_EFCT3),a
+
+req_skip02:
+
+	ret
+
+; -----------------------------------------------------------------------------
+; Seリクエスト
+; (REQ_EFCT1) リクエストタイプ
+; (REQ_EFCT1+1) リクエストナンバー
+; -----------------------------------------------------------------------------
+SeRequest:
+	push af				; Cahnnel Noを保存
+
+	call SeDatClear		; hl > hl+WKLEN Clear
+						; Set DCSGReg
+	ld	hl,bc			; 疑似命令
+	ld	a,(hl)
+	inc	hl
+	ld	h,(hl)			; ReqNo
+	ld	l,a				; Command Nml/Sys/Stop
+
+	ld	a,h
+	cp	SE_ID_STOP
+	jp	z,stop_req
+
+	call	SeRequestCore
+
+	pop	af				; Cahnnel Noを復帰
+
+	or	a
+	jp	z,se_req_ch1
+
+	cp	1
+	jp	z,se_req_ch2
+
+se_req_ch3:
+	ld	a,(SePlayStat)
+	set	SE_PLAY_BIT3,a
+	ld	(SePlayStat),a
+	ret
+
+se_req_ch2:
+	ld	a,(SePlayStat)
+	set	SE_PLAY_BIT2,a
+	ld	(SePlayStat),a
+	ret
+
+se_req_ch1:
+	ld	a,(SePlayStat)
+	set	SE_PLAY_BIT1,a
+	ld	(SePlayStat),a
+
+	ret
+
+stop_req:
+	call SeRegClear		; 無音をセット
+
+	pop	af				; Cahnnel Noを復帰
+
+	or	a
+	jp	z,se_req_ch11
+
+	cp	1
+	jp	z,se_req_ch22
+
+se_req_ch33:
+	ld	a,(SePlayStat)
+	res	SE_PLAY_BIT3,a
+	ld	(SePlayStat),a
+	ret
+
+se_req_ch22:
+	ld	a,(SePlayStat)
+	res	SE_PLAY_BIT2,a
+	ld	(SePlayStat),a
+	ret
+
+se_req_ch11:
+	ld	a,(SePlayStat)
+	res	SE_PLAY_BIT1,a
+	ld	(SePlayStat),a
+
+	ret
+
+; --------------------------------------------
+; リクエストの処理
+; hl <= h:param l:command
+; --------------------------------------------
+SeRequestCore
+	ld	a,l
+	cp	SE_REQ_NML
+	jp	z,SeReqNml
+
+SeReqTYPE1:		; 特殊リクエスト(考えていない) 
+	; 将来の拡張用
+	ret
+
+SeReqNml:		; 通常リクエスト
+	ld	a,h
+	call	SeRequestSet68k
+	ret
+
+;-----------------------------------------------------------
+; SEの音符テーブルを拾って、セットする(68k Bank)
+;   IX ChannelDat
+;   a RequestNo
+;-----------------------------------------------------------
+SeRequestSet68k:
+	add	a,a
+	ld	l,a
+	ld	h,0
+	ld  de,MPU68K_BANK_ADDR		; 68kBankの先頭にSE Offset table(SeListTbl)
+	add hl,de
+	ld	a,(hl)
+	inc	hl
+	ld	l,(hl)			; 68Kを入れ替え
+	ld	h,a
+
+	ld	de,MPU68K_BANK_ADDR
+	add	hl,de
+	ld  de,0
+	ld	a,1
+	
+	ld	(ix+2),hl	; DATA ADRS WORK    (譜面を割り込ませる)
+	ld	(ix+4),de	; 0 DATA TOP ADRESS
+	ld	(ix),A		; 1 カウンター
+
+	RET
+
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+; SE用のチャンネルデータ
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+SeCh1Dat:        ; SE1
+	ds	42
+SeCh2Dat:        ; SE2
+	ds	42
+SeCh3Dat:        ; SE3
+	ds	42
+
+; ---------------------------------------------------------------------------
+; Z80側参照用(処理中に68Kから書き換えられないようにVSyncの先頭でコピーする)
+REQ_CMMAND		db	0
+REQ_PARAM		db	0
+
+MUB_LOW_ADDR	db	0
+MUB_MID_ADDR	db	0
+MUB_HIGH_ADDR	db	0
+
+REQ_EFCT1		db	0
+REQ_EFCT_PARAM1	db	0
+REQ_EFCT2		db	0
+REQ_EFCT_PARAM2	db	0
+REQ_EFCT3		db	0
+REQ_EFCT_PARAM3	db	0
+
+PCM_LOW_ADDR	db	0
+PCM_MID_ADDR	db	0
+PCM_HIGH_ADDR	db	0
+
+PCM_END_LOW_ADDR	db	0
+PCM_END_HIGH_ADDR	db	0
+
+; 演奏中のMubBank(演奏開始時にコピーされる)
+NOW_MUB_LOW_ADDR	db	0
+NOW_MUB_MID_ADDR	db	0
+NOW_MUB_HIGH_ADDR	db	0
+
+; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+SetBankTmp:
+	db	0		; low
+	db	0		; mid
+	db	0		; high
+
+;----------------------------------------------------------------------
+; End of File
+;----------------------------------------------------------------------
