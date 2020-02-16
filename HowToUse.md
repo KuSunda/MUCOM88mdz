@@ -74,14 +74,16 @@ batファイルで[mucom88.exe]を使っています。PATHの通った場所に
 |   cutoutMub.exe : .mubファイルをMUCOM88mdz(SE)に変換  
 |   
 +---mub  
-|       mub_list.txt  : 変換する.muc(BGM)ファイルのリスト
-|       muc2md.bat    : .muc → .mub → MUCOM88mdzに変換
+|       mub_list.txt  : 変換する.muc(BGM)ファイルのリスト  
+|       muc2md.bat    : .muc → .mub → MUCOM88mdzに変換  
+|   
 +---pcm  
-|       pcm2md.bat  : .wav → MUCOM88mdzに変換
-|       pcm_list.txt  : 変換する.wav(PCM)ファイルのリスト
+|       pcm2md.bat  : .wav → MUCOM88mdzに変換  
+|       pcm_list.txt  : 変換する.wav(PCM)ファイルのリスト  
+|   
 ----se  
-        se2md.bat   : .muc → .mub → MUCOM88mdzに変換
-        se_list.txt  : 変換する.muc(SE)ファイルのリスト
+        se2md.bat   : .muc → .mub → MUCOM88mdzに変換  
+        se_list.txt  : 変換する.muc(SE)ファイルのリスト  
 
 ## テストモード
   - 操作方法  
