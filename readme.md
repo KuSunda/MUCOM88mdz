@@ -21,11 +21,10 @@ MUCOM88mdzはMUCOM88から移植・派生した音源ドライバーとそれの
 
 ## MUCOM88mdzについて  
 MUCOM88mdzの**mdz**は、md:MegaDrive / z:Z80版ドライバーを意味しています。  
-移植の目的は68000側負荷の低減とDCSGでSEを演奏させたいとなります。(シューティングが作りやすいかな？)  
+移植の目的はMUCOM88に興味が有った・DCSGでSEを演奏させたい・68000の負荷を軽くしてシューティングを作りやすくしたかったとなります。  
 
 メガドライブ開発環境はSGDK(Ver.1.34)で作成されています。  
 https://github.com/Stephane-D/SGDK
-
 
 ### MUCOM88mdzの仕様
   - BGM(.mub)をFM6チャンネル/DCSG3チャンネルで演奏
