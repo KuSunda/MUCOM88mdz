@@ -14,6 +14,7 @@ const u8 Mucom88mdz_SeIdTbl[MUB_SE_NUM] = {
 	MUB_SEID_OK_D,
 	MUB_SEID_PAUSE_D,
 	MUB_SEID_SHOT_D,
+	MUB_SEID_NOISE0000_F,
 };
 
 //--------------------------------------
@@ -27,4 +28,5 @@ const SE_REQ_TBL Mucom88mdz_SeSetTbl[MUB_SE_SET_NUM] = {
 	{{ MUB_SEID_OK_D, MUB_SEID_NONE, MUB_SEID_NONE }},
 	{{ MUB_SEID_PAUSE_D, MUB_SEID_NONE, MUB_SEID_NONE }},
 	{{ MUB_SEID_SHOT_D, MUB_SEID_NONE, MUB_SEID_NONE }},
+	{{ MUB_SEID_NONE, MUB_SEID_NONE, MUB_SEID_NOISE0000_F }},
 };

@@ -1,4 +1,4 @@
-[WIP]MUCOM88mdz
+MUCOM88mdz
 ------------------
 ## 概要
 MUCOM88mdzはNEC PC-8801mkⅡSR以降版のMUCOM88(music.asm(Ver.1.7))をメガドライブ/Genesisに移植することで、
@@ -63,5 +63,12 @@ https://github.com/Stephane-D/SGDK
 - HowToUse.md を参考にしてください。
 
 ## リリースノート
+  - Ver.0.99  
+  FチャンネルでP/w(PC88互換ノイズ)コマンドに対応  
+  テストモードにZボタンでMubの4倍速演奏出ｗバッグ機能を追加  
+  Mub/SEにノイズのサンプルを追加
+  - Z80のコードの整理  
+  コード・コメントの整理  
+  Rhythm/PCM(SB2)の実装を整理削除  
   - Ver.0.9  
   WIPで公開  

@@ -6,3 +6,4 @@ CURSOR.mub
 OK.mub
 PAUSE.mub
 SHOT.mub
+NOISE0000.mub

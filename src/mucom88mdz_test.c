@@ -237,7 +237,24 @@ void Mucom88mdZ_TestMain()
 			break;
 		}
 	}
-
+	
+	// Debug
+	if (JoyData[P1].now & SHOT_Z)
+	{
+		// FADE(BGM Only)
+		switch (Mwk->SoundTestCursor)
+		{
+		case 0:
+			Mucom88mdZ_DebugQueReq(1);
+			break;
+		case 1:
+			break;
+		case 2:
+			break;
+		}
+	}else{
+		Mucom88mdZ_DebugQueReq(0);
+	}
 
 }
 
@@ -299,7 +316,7 @@ static void mucom88_test_statebase_disp()
 	y = 0;
 
 	Dbg_SetPrintPos(x, y);
-	Dbg_PrintString("MUCOM88 for MD Z80 TEST", 0);
+	Dbg_PrintString("MUCOM88mdz TEST", 0);
 
 	x = 1;
 	y = 24;
@@ -359,12 +376,12 @@ static void musom88_test_menu_disp()
 	u16 x;
 
 	x = 25;
-	Dbg_SetPrintPos(x, 21);
+	Dbg_SetPrintPos(x, 22);
 	Dbg_PrintString("OCT:", 0);
 	Dbg_Print8(Mucom88mdz_Z80State.z80_OctUnderNum, 0);
-	Dbg_SetPrintPos(x, 22);
-	Dbg_PrintString("[w]:", 0);
-	Dbg_Print8(Mucom88mdz_Z80State.z80_NoisewNum, 0);
+//	Dbg_SetPrintPos(x, 22);
+//	Dbg_PrintString("[w]:", 0);
+//	Dbg_Print8(Mucom88mdz_Z80State.z80_NoisewNum, 0);
 
 	Dbg_SetPrintPos(15, 2);		// MUB STOP PLAY
 	Dbg_PrintString(snd_state_tbl[Mucom88mdz_GetPlayState()], 0);
@@ -407,7 +424,9 @@ static void mucom88_test_cursor_disp()
 	Dbg_PrintString(">", 0);
 }
 
+
 //------------------------------------------------------------------
+// CHDATの状態を表示
 static void mucom88_test_chdat_disp()
 {
 	static char *tone_name_tbl[CHANNEL_WK_NUM] = {
@@ -455,12 +474,26 @@ static void mucom88_test_chdat_disp()
 
 		// 音符
 		Dbg_SetPrintPos(x + 3, y);
-		Dbg_PrintString(tone_name_tbl[(Mucom88mdz_Z80State.chdat_wak[i].ftune & 0x0f)], 0);
+
+		if( (Mucom88mdz_Z80State.chdat_wak[i].state & 0x40) != 0 /*6Bit*/ ){
+			Dbg_PrintString(tone_name_tbl[(Mucom88mdz_Z80State.chdat_wak[i].ftune & 0x0f)], 0);
+		}else{
+			Dbg_PrintString("  ", 0);		// Key Off
+		}
 
 		// Volume
-
 		Dbg_SetPrintPos(x + 6, y);
 		Dbg_Print8(Mucom88mdz_Z80State.chdat_wak[i].volume, 0);
+
+		if( (i == CH_SSG3) || (i == CH_SE_SSG3) ){
+			Dbg_SetPrintPos(x + 9, y);
+			Dbg_PrintString("P:", 0);		// Key Off
+			Dbg_Print8(Mucom88mdz_Z80State.chdat_wak[i].mix_mode, 0);
+
+			Dbg_PrintString(" ", 0);		// Key Off
+			Dbg_PrintString("w:", 0);		// Key Off
+			Dbg_Print8(Mucom88mdz_Z80State.chdat_wak[i].w_param, 0);
+		}
 
 		y += 1;
 	}

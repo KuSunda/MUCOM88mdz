@@ -63,6 +63,8 @@
 
 #define	PCM_STATUS	(WORK_RAM_ADDR + 0x2a)
 
+// CUE
+#define	CUE_REQ_RCV	(WORK_RAM_ADDR + 0x2b)
 
 // .mubに埋め込むフラグの検出
 #define FLG_ADR			(WORK_RAM_ADDR + 0x40)		// ; F9  サブコマンドで使用(曲からフラグを立てる)
@@ -105,6 +107,9 @@ typedef struct muc88_chdat
 	u8 ftune;
 
 	u8 state;		// IX+31 bit6 keyoff
+
+	u8 mix_mode;	// DCSG Pコマンド(F Ch)
+	u8 w_param;		// DCSG wコマンド(F Ch)
 
 	/* data */
 }MUC88_CHDAT;
@@ -258,6 +263,9 @@ typedef struct _MUCOM88MDZ_REQ_WORK{
 	u16	start_adrs;
 	u16	pcm_size;
 
+	// Debug
+	u8	cue;
+
 }MUCOM88MDZ_REQ_WORK;
 
 
@@ -279,6 +287,7 @@ extern void Mucom88mdz_SetSeStop(u8 channel);
 extern void Mucom88mdz_SetSeAllStop();
 extern void Mucom88mdZ_SetPcmReq(u8 no);
 extern void Mucom88mdZ_SetPcmStop();
+extern void Mucom88mdZ_DebugQueReq(u8 param);
 extern u8 Mucom88mdz_GetPlayState();
 extern u8 Mucom88mdz_GetLoopMubFlag();
 extern u8 Mucom88mdz_GetLooped();

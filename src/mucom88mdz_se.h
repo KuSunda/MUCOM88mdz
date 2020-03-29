@@ -14,14 +14,15 @@ enum{
 	MUB_SEID_OK_D,
 	MUB_SEID_PAUSE_D,
 	MUB_SEID_SHOT_D,
+	MUB_SEID_NOISE0000_F,
 	MUB_SEID_NUM
 };
 
 //--------------------------------------
 
 //--------------------------------------
-#define MUB_SE_NUM	(8)
-#define MUB_SE_SET_NUM	(8)
+#define MUB_SE_NUM	(9)
+#define MUB_SE_SET_NUM	(9)
 
 //--------------------------------------
 extern const u16 Mucom88mdzSeTbl;

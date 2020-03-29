@@ -54,6 +54,8 @@ void Mucom88mdz_SetSeAllStop();
 void Mucom88mdZ_SetPcmReq(u8 no);
 void Mucom88mdZ_SetPcmStop();
 
+void Mucom88mdZ_DebugQueReq(u8 param);
+
 u8 Mucom88mdz_GetPlayState();
 u8 Mucom88mdz_GetLoopMubLoag();
 u8 Mucom88mdz_GetLooped();
@@ -223,6 +225,14 @@ void Mucom88mdz_CopyStatus68kToZ80()
 		*ap = (u8)0;
 	}
 
+	// Debug
+	u8 cue_param = 0;
+	if(Mucom88mdz_ReqWork.cue != 0 ){
+		cue_param = 1;
+	}
+	ap = (u8 *)CUE_REQ_RCV;
+	*ap = (u8)cue_param;
+
 	// z80 稼働
 	z80_BusRelease();
 }
@@ -287,6 +297,9 @@ void Mucom88mdz_CopyStatusZ80To68k()
 		Mucom88mdz_Z80State.chdat_wak[i].volume = (*(ap + 6)) & 0x0f;
 		Mucom88mdz_Z80State.chdat_wak[i].ftune = *(ap + 32);
 		Mucom88mdz_Z80State.chdat_wak[i].state = *(ap + 31);
+
+		Mucom88mdz_Z80State.chdat_wak[i].mix_mode = *(ap + 42);
+		Mucom88mdz_Z80State.chdat_wak[i].w_param = *(ap + 43);
 	}
 
 	// PCM
@@ -473,6 +486,16 @@ void Mucom88mdZ_SetPcmStop()
 	Mucom88mdz_ReqWork.pcm_req_flag = 1;
 	Mucom88mdz_ReqWork.pcm_req_no = 0;
 	Mucom88mdz_ReqWork.pcm_req_command = PCM_STOP;
+}
+
+//*****************************************************************************
+//*****************************************************************************
+// Debug
+//*****************************************************************************
+//*****************************************************************************
+void Mucom88mdZ_DebugQueReq(u8 param)
+{
+	Mucom88mdz_ReqWork.cue = param;
 }
 
 //*****************************************************************************

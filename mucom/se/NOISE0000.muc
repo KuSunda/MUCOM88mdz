@@ -1,0 +1,17 @@
+#mucom88 1.7
+#title Cansel 00
+#composer 
+#author 
+#date 2019/10/12
+#comment Noise00
+
+#  CNoise SE
+
+F C128 t200 l64 @0 v14 E255,255,255,190,1,20
+
+#F  P1 o4 c c c c
+#F  c&c&c&c
+
+F  P2 w0c w10c w15c w20c
+F  w0c& w0c& w0c& w0c
+
