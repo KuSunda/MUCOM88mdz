@@ -326,7 +326,7 @@ static void mucom88_test_statebase_disp()
 
 	y = 25;
 	Dbg_SetPrintPos(x, y);
-	Dbg_PrintString("A:PLAY B:STOP C:FADE(Mub)", 0);
+	Dbg_PrintString("A:PLAY B:STOP C:FADE(Mub) Z:CUE", 0);
 }
 
 //=============================================================================
@@ -358,6 +358,9 @@ static void musom88_test_menu_disp()
 	Dbg_SetPrintPos(5, 2);
 	Dbg_PrintString(Mucom88mdz_mub_name_tbl[Mwk->sel_no[0]], 0);
 
+	Dbg_SetPrintPos(15, 2);		// MUB STOP PLAY
+	Dbg_PrintString(snd_state_tbl[Mucom88mdz_GetPlayState()], 0);
+
 	Dbg_SetPrintPos(1, 3);
 	Dbg_PrintString("Se :", 0);
 
@@ -375,16 +378,13 @@ static void musom88_test_menu_disp()
 
 	u16 x;
 
-	x = 25;
+	x = 27;
 	Dbg_SetPrintPos(x, 22);
 	Dbg_PrintString("OCT:", 0);
 	Dbg_Print8(Mucom88mdz_Z80State.z80_OctUnderNum, 0);
 //	Dbg_SetPrintPos(x, 22);
 //	Dbg_PrintString("[w]:", 0);
 //	Dbg_Print8(Mucom88mdz_Z80State.z80_NoisewNum, 0);
-
-	Dbg_SetPrintPos(15, 2);		// MUB STOP PLAY
-	Dbg_PrintString(snd_state_tbl[Mucom88mdz_GetPlayState()], 0);
 
 	// LOOP曲か？
 	Dbg_SetPrintPos(1, 6);
