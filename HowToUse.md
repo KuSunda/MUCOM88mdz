@@ -76,14 +76,14 @@ batファイルで[mucom88.exe]を使っています。PATHの通った場所に
 |   
 +---mub  
 |       mub_list.txt  : 変換する.muc(BGM)ファイルのリスト  
-|       muc2md.bat    : .muc → .mub → MUCOM88mdzに変換  
+|       muc2md.bat    : .muc → .mub → MUCOM88mdzに変換・MD向けに変換してsrcフォルダにコピー  
 |   
 +---pcm  
-|       pcm2md.bat  : .wav → MUCOM88mdzに変換  
+|       pcm2md.bat  : .wav → MUCOM88mdzに変換・MD向けに変換してsrcフォルダにコピー    
 |       pcm_list.txt  : 変換する.wav(PCM)ファイルのリスト  
 |   
 ----se  
-        se2md.bat   : .muc → .mub → MUCOM88mdzに変換  
+        se2md.bat   : .muc → .mub → MUCOM88mdzに変換・MD向けに変換してsrcフォルダにコピー    
         se_list.txt  : 変換する.muc(SE)ファイルのリスト  
 
 ## テストモード

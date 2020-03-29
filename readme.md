@@ -63,7 +63,7 @@ https://github.com/Stephane-D/SGDK
 - HowToUse.md を参考にしてください。
 
 ## リリースノート
-  - Ver.0.99  
+  - Ver.1.0  
   FチャンネルでP/w(PC88互換ノイズ)コマンドに対応  
   テストモードにZボタンでMubの4倍速演奏出ｗバッグ機能を追加  
   Mub/SEにノイズのサンプルを追加
