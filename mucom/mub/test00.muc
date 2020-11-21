@@ -9,8 +9,8 @@
 # *1{cdefedc4efgagfe4c4c4c4c4c16c16d16d16e16e16f16f16edc4}
 
 
-A C128 t200 @24 p3 l8 o4 v12 *1
-B C128 t200 @25 p1 l8 o4 v12 r1r1 *1
-C C128 t200 @26 p2 l8 o4 v12 r1r1r1r1 *1
+A C128 t110 @24 p3 l8 o4 v12 *1
+B C128 t110 @25 p1 l8 o4 v12 r1r1 *1
+C C128 t110 @26 p2 l8 o4 v12 r1r1r1r1 *1
 
 
