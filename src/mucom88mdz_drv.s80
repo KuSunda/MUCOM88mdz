@@ -52,7 +52,7 @@
 ;	define	USE_PC88_COMPATIBLE_VOL
 
 ; 駆動タイミングをTimerBのOverFlowフラグで確認する
-	define	USE_TIERB_DRIVE
+;	define	USE_TIERB_DRIVE
 
 ; DCSGのNATIVEノイズ対応を有効にする（デフォルトはPC88互換）まだ作っていない
 ;	define	USE_DCSG_NATIVE_NOISE
