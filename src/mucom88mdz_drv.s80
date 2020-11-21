@@ -51,6 +51,53 @@
 ; PC88のVolumeバランスの再現ですが、エンベロープが平坦になる弊害が有る。
 ;	define	USE_PC88_COMPATIBLE_VOL
 
+; 駆動タイミングをTimerBのOverFlowフラグで確認する
+;	define	USE_TIMER_DRIVE
+
+/*
+
+*******************************************************
+*                                                                                                         
+* MainLoop Top                                                                                 
+*                                                                                                         
+*******************************************************
+MainLoopTop                                                               XREF[3]:        RST5:0034(j), ram:003e(j), 
+                                                                                                            From68K_Req_ram_01a0:0136(j)  
+LD                A,(FM_IO13_ADRS_0x4000 )
+BIT              0x1,A                                                                            ; Timer A OverFlowFlag
+JR                Z,LAB_ram_0021
+
+
+*******************************************************
+* Timer　Bをリセットして、Timer B稼働開始                                                
+*                                                                                                         
+*******************************************************
+TimerReset_B_Start_ram_0417:
+                                                Drive_Timer_B_WakeUp_036b:03a
+LD                BC,0x273a                                                                    ; ０ｘ27 reg 0x3a=TimerルセットTime
+JR                YM2162_Wait13_BC_Write                                          ; undefined YM2162_Wait13_BC_W
+
+
+
+
+*******************************************************
+* FM1-3チャンネル用レジスタ書き込み                                                           
+* ＋FMのレジスタ書き込みウェイト                                                                
+*******************************************************
+YM2162_Wait13_BC_Write                                         XREF[24]:      RST7:003a(c), 
+LD                A,(FM_IO13_ADRS_0x4000 )
+BIT              0x7,A
+JR                NZ,YM2162_Wait13_BC_Write
+LD                A,B
+LD                (FM_IO13_ADRS_0x4000 ),A
+LD                A,C
+LD                (FM_IO13_ADRS2_0x4001 ),A
+RET
+
+
+*/
+
+
 
 ; DCSGのNATIVEノイズ対応を有効にする（デフォルトはPC88互換）まだ作っていない
 ;	define	USE_DCSG_NATIVE_NOISE
@@ -430,29 +477,59 @@ MainLoop:
 
 pcm_skip:
 	; Mub ------------------------------------
-	call    Check_MusicReq
+	call	Check_MusicReq
 
-	ld  a,(SND_STATUS)
+	ld	a,(SND_STATUS)
 	or	a
-	jp  z,mub_noplay_skip
+	jp	z,mub_noplay_skip
 
 	xor		a
 	call	SetBank
 
-	call    PL_SND          ; Timer-Bのリセットが行われている
+	call	PL_SND          ; Timer-Bのリセットが行われている
 
 mub_noplay_skip:
 	; SE ------------------------------
-	call SeMain
+	call	SeMain
 
+
+	; -------------------------------------------
+
+	ifdef	USE_TIMER_DRIVE
+	; Drive Timing ------------------------------
+TimerBWait
+
+	ld	a,(FM_IO13_ADDR )
+	bit	0x1,a							; Timer A OverFlowFlag
+	jr	Z,TimerBWait
+
+
+
+	else
+	; Drive VSync ------------------------------
 VSyncWait
-	ld  a,(VSYNCFLAG)
+	ld	a,(VSYNCFLAG)
 	and	a
-	jp z,VSyncWait
+	jp	z,VSyncWait
 	xor	a
-	ld  (VSYNCFLAG),a
+	ld	(VSYNCFLAG),a
+
+	endif
 
 	jp  MainLoop
+
+	; Timer-B Drive Subtoutine ------------------------------
+
+	ifdef	USE_TIMER_DRIVE
+	; memo 0x27 MODE/ResetBA/ENABE BA/Load BA
+	; 
+TimerBStart
+	ld		de,0x273a		; Mainに設定が有るのでどうしたものか？
+	call	PSGOUT		;  TIMER-OFF
+
+	ret
+
+	endif
 
 ; -----------------------------------------------------------------------------
 req_param_copy:
@@ -4366,12 +4443,12 @@ SSINIT:
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 ; 通常モードに移行
 TO_NML
-	LD	A,38H
+	LD	A,38H			; TimerBフラグ有効
 	LD	(PLSET1+1),A
-	LD	A,3AH
+	LD	A,3AH			; TimerBフラフ有効 + TimerB動作
 TNML2:
 	LD	(PLSET2+1),A
-	LD	D,27H
+	LD	D,27H			; Reg
 	LD	E,A
 	CALL	PSGOUT
 	RET
@@ -4379,9 +4456,9 @@ TNML2:
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 ; EFCTモードに移行
 TO_EFC:
-	LD	A,78H
+	LD	A,78H			; 効果音モード + TimerBフラフ有効
 	LD	(PLSET1+1),A
-	LD	A,7AH
+	LD	A,7AH			; 効果音モード + TimerBフラフ有効 + TimerB動作
 	JR	TNML2
 
 ; -----------------------------------------------------------------------------
