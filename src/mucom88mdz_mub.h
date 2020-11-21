@@ -6,9 +6,9 @@
 #include <genesis.h>
 
 enum{
+	MUB_ID_EFFECT2,
 	MUB_ID_TEST00,
 	MUB_ID_TEST01,
-	MUB_ID_NOISETEST,
 	MUB_NUM
 };
 

@@ -52,51 +52,7 @@
 ;	define	USE_PC88_COMPATIBLE_VOL
 
 ; 駆動タイミングをTimerBのOverFlowフラグで確認する
-;	define	USE_TIMER_DRIVE
-
-/*
-
-*******************************************************
-*                                                                                                         
-* MainLoop Top                                                                                 
-*                                                                                                         
-*******************************************************
-MainLoopTop                                                               XREF[3]:        RST5:0034(j), ram:003e(j), 
-                                                                                                            From68K_Req_ram_01a0:0136(j)  
-LD                A,(FM_IO13_ADRS_0x4000 )
-BIT              0x1,A                                                                            ; Timer A OverFlowFlag
-JR                Z,LAB_ram_0021
-
-
-*******************************************************
-* Timer　Bをリセットして、Timer B稼働開始                                                
-*                                                                                                         
-*******************************************************
-TimerReset_B_Start_ram_0417:
-                                                Drive_Timer_B_WakeUp_036b:03a
-LD                BC,0x273a                                                                    ; ０ｘ27 reg 0x3a=TimerルセットTime
-JR                YM2162_Wait13_BC_Write                                          ; undefined YM2162_Wait13_BC_W
-
-
-
-
-*******************************************************
-* FM1-3チャンネル用レジスタ書き込み                                                           
-* ＋FMのレジスタ書き込みウェイト                                                                
-*******************************************************
-YM2162_Wait13_BC_Write                                         XREF[24]:      RST7:003a(c), 
-LD                A,(FM_IO13_ADRS_0x4000 )
-BIT              0x7,A
-JR                NZ,YM2162_Wait13_BC_Write
-LD                A,B
-LD                (FM_IO13_ADRS_0x4000 ),A
-LD                A,C
-LD                (FM_IO13_ADRS2_0x4001 ),A
-RET
-
-
-*/
-
+;	define	USE_TIERB_DRIVE
 
 
 ; DCSGのNATIVEノイズ対応を有効にする（デフォルトはPC88互換）まだ作っていない
@@ -293,6 +249,9 @@ PCM_END_HIGH_ADDR_RCV	EQU	WORK_RAM_ADDR + 0x29
 PCM_STATUS			EQU WORK_RAM_ADDR + 0x2a
 
 CUE_REQ_RCV			EQU WORK_RAM_ADDR + 0x2b
+
+PLSET1_WK			EQU WORK_RAM_ADDR + 0x2c
+PLSET2_WK			EQU WORK_RAM_ADDR + 0x2d
 
 ; ---------------------------------------------------------------------------
 ; Mucomの演奏状態(STOP/PLAY/MUTE/PAUSEなど)
@@ -495,15 +454,34 @@ mub_noplay_skip:
 
 	; -------------------------------------------
 
-	ifdef	USE_TIMER_DRIVE
+	ifdef	USE_TIERB_DRIVE
 	; Drive Timing ------------------------------
-TimerBWait
+TimerBWait:
 
-	ld	a,(FM_IO13_ADDR )
+	; 演奏中
+	ld	a,(SND_STATUS)
+	or	a
+	jp	z,TimerBWait_skip
+
+	ld	a,(FM_IO13_ADDR)
 	bit	0x1,a							; Timer A OverFlowFlag
 	jr	Z,TimerBWait
 
 
+	; Timer-Bフラグが経過　TIMERBは演奏中に再起動している
+
+	jp  MainLoop
+
+TimerBWait_skip:
+	; 演奏停止中
+VSyncWait
+	ld	a,(VSYNCFLAG)
+	and	a
+	jp	z,VSyncWait
+	xor	a
+	ld	(VSYNCFLAG),a
+
+	jp  MainLoop
 
 	else
 	; Drive VSync ------------------------------
@@ -514,13 +492,14 @@ VSyncWait
 	xor	a
 	ld	(VSYNCFLAG),a
 
+	jp  MainLoop
+
 	endif
 
-	jp  MainLoop
 
 	; Timer-B Drive Subtoutine ------------------------------
 
-	ifdef	USE_TIMER_DRIVE
+	ifdef	USE_TIERB_DRIVE
 	; memo 0x27 MODE/ResetBA/ENABE BA/Load BA
 	; 
 TimerBStart
@@ -1124,7 +1103,7 @@ FDO3
 ; Music Start
 ; -----------------------------------------------------------------------------
 MSTART
-	LD      (MUSICNUM),A			; MDは0で固定
+	LD		(MUSICNUM),A			; MDは0で固定
 	CALL	AKYOFF
 	CALL	SSGOFF
 	CALL	WORKINIT				; チャンネルデータのクリアとチャンネルごとの譜面をセット
@@ -1133,7 +1112,10 @@ MSTART
 START
 	PUSH	HL
 
-;	call	InitNoise
+	ifdef USE_TIERB_DRIVE
+	call	ENBL
+	endif
+
 	call	MONO
 	CALL	TO_NML
 
@@ -1153,22 +1135,14 @@ MSTOP:
 	RET
 
 ; -----------------------------------------------------------------------------
-; Noiseチャンネル初期化(未使用)
-; -----------------------------------------------------------------------------
-InitNoise:
-	ret
-
-; -----------------------------------------------------------------------------
 ; サウンド関係の割り込み許可(使わない)
 ; -----------------------------------------------------------------------------
-/*
 ENBL:
 	LD	A,(TIMER_B)
 	LD	E,A
 	CALL	STTMB		;  SET Timer-B
 
 	RET
-*/
 
 ; -----------------------------------------------------------------------------
 ;	ALL MONORAL / H.LFO OFF
@@ -2921,9 +2895,7 @@ PCM_ALL_VOL_ON:
 ; -----------------------------------------------------------------------------	
 ; Timer-B カウンタ・セット　ルーチン
 ; IN: E<= TIMER_B COUNTER
-; @note PC88 only
-; @note 削除予定
-/*
+; @note TIMERB Driveに対応
 STTMB:
 	PUSH AF
 	PUSH DE
@@ -2945,7 +2917,6 @@ STTMB2:
 	POP AF
 
 	RET
-*/
 
 ; -----------------------------------------------------------------------------
 ; Software LFO
